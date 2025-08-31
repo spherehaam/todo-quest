@@ -1,11 +1,13 @@
 export const runtime = 'nodejs';
 
 import { cookies, headers } from 'next/headers';
+import { NextResponse } from 'next/server';
 import { SignJWT, jwtVerify, JWTPayload } from 'jose';
 import crypto from 'crypto';
 
 const isProd = process.env.NODE_ENV === 'production';
 const SAMESITE: 'lax' | 'none' = 'lax'; // クロスドメインが必要なら 'none' にし、HTTPS必須
+
 export const COOKIE_ACCESS = 'auth';
 export const COOKIE_REFRESH = 'refresh';
 export const COOKIE_CSRF = 'csrf_token';
@@ -28,13 +30,18 @@ export async function signAccessToken(user: { id: string; email: string }) {
         .setIssuedAt()
         .setExpirationTime(`${ACCESS_TTL_SEC}s`)
         .sign(getSecret());
-    }
+}
 
 export async function signRefreshToken(
     user: { id: string; email: string },
     sessionId: string
 ) {
-    return await new SignJWT({ sub: user.id, email: user.email, typ: 'refresh', jti: sessionId })
+    return await new SignJWT({
+        sub: user.id,
+        email: user.email,
+        typ: 'refresh',
+        jti: sessionId,
+    })
         .setProtectedHeader({ alg: 'HS256' })
         .setIssuedAt()
         .setExpirationTime(`${REFRESH_TTL_SEC}s`)
@@ -42,13 +49,17 @@ export async function signRefreshToken(
 }
 
 export async function verifyAccess(token: string) {
-    const { payload } = await jwtVerify(token, getSecret(), { algorithms: ['HS256'] });
+    const { payload } = await jwtVerify(token, getSecret(), {
+        algorithms: ['HS256'],
+    });
     if (payload.typ !== 'access') throw new Error('wrong token type');
     return payload as JWTPayload & { email: string };
 }
 
 export async function verifyRefresh(token: string) {
-    const { payload } = await jwtVerify(token, getSecret(), { algorithms: ['HS256'] });
+    const { payload } = await jwtVerify(token, getSecret(), {
+        algorithms: ['HS256'],
+    });
     if (payload.typ !== 'refresh') throw new Error('wrong token type');
     return payload as JWTPayload & { email: string; jti: string };
 }
@@ -63,11 +74,11 @@ export async function requireCsrf() {
     }
 }
 
-export function setAccessCookie(res: Response, token: string) {
-    // @ts-expect-error NextResponse.cookies 用
-    res.cookies.set({
-        name: COOKIE_ACCESS,
-        value: token,
+/**
+ * Cookie セット用ラッパー
+ */
+export function setAccessCookie(res: NextResponse, token: string) {
+    res.cookies.set(COOKIE_ACCESS, token, {
         httpOnly: true,
         secure: isProd,
         sameSite: SAMESITE,
@@ -76,24 +87,18 @@ export function setAccessCookie(res: Response, token: string) {
     });
 }
 
-export function setRefreshCookie(res: Response, token: string) {
-    // @ts-expect-error
-    res.cookies.set({
-        name: COOKIE_REFRESH,
-        value: token,
+export function setRefreshCookie(res: NextResponse, token: string) {
+    res.cookies.set(COOKIE_REFRESH, token, {
         httpOnly: true,
         secure: isProd,
         sameSite: SAMESITE,
         path: '/',
         maxAge: REFRESH_TTL_SEC,
     });
-    }
+}
 
-export function setCsrfCookie(res: Response, value: string) {
-    // @ts-expect-error
-    res.cookies.set({
-        name: COOKIE_CSRF,
-        value,
+export function setCsrfCookie(res: NextResponse, value: string) {
+    res.cookies.set(COOKIE_CSRF, value, {
         httpOnly: false, // JSから読める
         secure: isProd,
         sameSite: SAMESITE,
@@ -106,16 +111,14 @@ export async function readAccessTokenFromCookie() {
     const c = await cookies();
     return c.get(COOKIE_ACCESS)?.value ?? '';
 }
+
 export async function readRefreshTokenFromCookie() {
     const c = await cookies();
     return c.get(COOKIE_REFRESH)?.value ?? '';
 }
 
-export async function clearAllAuthCookies(res: Response) {
-    // @ts-expect-error
-    res.cookies.set({ name: COOKIE_ACCESS, value: '', path: '/', maxAge: 0 });
-    // @ts-expect-error
-    res.cookies.set({ name: COOKIE_REFRESH, value: '', path: '/', maxAge: 0 });
-    // @ts-expect-error
-    res.cookies.set({ name: COOKIE_CSRF, value: '', path: '/', maxAge: 0 });
+export function clearAllAuthCookies(res: NextResponse) {
+    res.cookies.set(COOKIE_ACCESS, '', { path: '/', maxAge: 0 });
+    res.cookies.set(COOKIE_REFRESH, '', { path: '/', maxAge: 0 });
+    res.cookies.set(COOKIE_CSRF, '', { path: '/', maxAge: 0 });
 }
