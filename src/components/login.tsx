@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 /**
@@ -15,13 +15,15 @@ function readCookie(name: string) {
 
 /**
  * ローカル環境判定（クライアント）:
- * - localhost / 127.0.0.1 のとき true
+ * - SSR 初回は常に false（サーバーと一致させる）
+ * - マウント後にだけ window を参照して更新
  */
 function useIsLocalhost() {
-    return useMemo(() => {
-        if (typeof window === 'undefined') return false;
-        return /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
+    const [isLocal, setIsLocal] = useState(false);
+    useEffect(() => {
+        setIsLocal(/^(localhost|127\.0\.0\.1)$/.test(window.location.hostname));
     }, []);
+    return isLocal;
 }
 
 /**
@@ -196,7 +198,7 @@ export default function Page() {
                         </p>
                     )}
 
-                    {/* デバッグボタン群：ローカルのみ表示 */}
+                    {/* デバッグボタン群：ローカルのみ表示（マウント後に切り替わる） */}
                     {isLocal && (
                         <div className="mt-6">
                             <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">

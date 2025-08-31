@@ -1,1 +1,2 @@
-export { runtime, GET, POST } from '@/lib/api/tasks';
+export const runtime = 'nodejs';
+export { GET, POST } from '@/lib/api/tasks';
