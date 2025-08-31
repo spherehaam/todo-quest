@@ -16,7 +16,6 @@ export type Task = {
     created_at: string;
 };
 
-// 内部ユーティリティ（必要なら他ファイルへ分割可）
 async function dbGetTasks(userId: string): Promise<Task[]> {
     const rows = await sql`
         SELECT id, user_id, title, done, created_at
@@ -24,7 +23,6 @@ async function dbGetTasks(userId: string): Promise<Task[]> {
         WHERE user_id = ${userId}
         ORDER BY created_at DESC
     `;
-    // rows は any[] と推論されるので、Task[] と明示して返す
     return rows as Task[];
 }
 
@@ -37,10 +35,6 @@ async function dbCreateTask(userId: string, title: string): Promise<Task> {
     return rows[0] as Task;
 }
 
-/**
- * GET /api/tasks
- * 自分のタスク一覧を返す（認可のみ）
- */
 export async function GET() {
     try {
         const token = await readAccessTokenFromCookie();
@@ -56,11 +50,6 @@ export async function GET() {
     }
 }
 
-/**
- * POST /api/tasks
- * タスクを1件追加（認可 + CSRF）
- * body: { title: string }
- */
 export async function POST(req: Request) {
     try {
         const token = await readAccessTokenFromCookie();
@@ -69,10 +58,16 @@ export async function POST(req: Request) {
         }
         const payload = await verifyAccess(token);
 
-        // 変更系なので CSRF 必須
         await requireCsrf();
 
-        const body = await req.json().catch(() => ({} as any));
+        type Body = { title?: string };
+        let body: Body = {};
+        try {
+            body = (await req.json()) as Body;
+        } catch {
+            body = {};
+        }
+
         const title = (body?.title ?? '').trim();
         if (!title) {
             return NextResponse.json({ ok: false, error: 'title_required' }, { status: 400 });
