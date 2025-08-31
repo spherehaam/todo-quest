@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
+/** タスクの型定義 */
 type Task = {
     id: string;
     title: string;
@@ -10,6 +11,7 @@ type Task = {
     created_at: string;
 };
 
+/** クッキーから値を取得 */
 function readCookie(name: string) {
     return document.cookie
         .split('; ')
@@ -17,6 +19,11 @@ function readCookie(name: string) {
         ?.split('=')[1];
 }
 
+/**
+ * ホーム画面（ログイン後専用）
+ * - 画面構成：ヘッダー / サイドバー / メイン
+ * - 既存の API 呼び出しと CSRF ロジックは維持
+ */
 export default function HomePage() {
     const [email, setEmail] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
@@ -54,6 +61,7 @@ export default function HomePage() {
         bootstrap();
     }, [router]);
 
+    /** タスク追加 */
     async function addTask() {
         const title = newTitle.trim();
         if (!title) {
@@ -72,7 +80,6 @@ export default function HomePage() {
         });
         const data = await res.json();
         if (res.ok) {
-            // 先頭に追加して即時反映
             setTasks((prev) => [data.task, ...prev]);
             setNewTitle('');
             setMsg('追加しました');
@@ -81,6 +88,7 @@ export default function HomePage() {
         }
     }
 
+    /** ログアウト */
     async function logout() {
         const csrf = readCookie('csrf_token') ?? '';
         await fetch('/api/logout', {
@@ -100,66 +108,174 @@ export default function HomePage() {
     }
 
     return (
-        <main className="mx-auto mt-10 max-w-2xl p-4">
-            <div className="mb-6 flex items-center justify-between">
-                <h1 className="text-2xl font-semibold">Home</h1>
-                <button
-                    className="bg-gray-800 text-white py-2 px-4 rounded"
-                    onClick={logout}
-                >
-                    ログアウト
-                </button>
-            </div>
+        <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+            {/* ===== ヘッダー ===== */}
+            <header className="sticky top-0 z-30 border-b border-gray-200/70 bg-white/80 backdrop-blur dark:border-gray-800 dark:bg-gray-900/70">
+                <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
+                    {/* ロゴ / ブランド */}
+                    <div className="flex items-center gap-2">
+                        <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600" />
+                        <span className="text-sm font-semibold tracking-wide">
+                            TodoQuest
+                        </span>
+                    </div>
 
-            <p className="mb-4">{email ? `ようこそ、${email} さん！` : 'ログインしていません。'}</p>
+                    {/* ユーザー / ログアウト */}
+                    <div className="flex items-center gap-3">
+                        <span className="hidden text-xs text-gray-500 dark:text-gray-400 sm:inline">
+                            {email ?? 'Guest'}
+                        </span>
+                        <button
+                            onClick={logout}
+                            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800"
+                        >
+                            ログアウト
+                        </button>
+                    </div>
+                </div>
+            </header>
 
-            {/* 追加フォーム */}
-            <div className="mb-4 flex gap-2">
-                <input
-                    className="flex-1 border rounded p-3"
-                    placeholder="新しいタスクのタイトル"
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                />
-                <button
-                    className="bg-black text-white px-4 rounded"
-                    onClick={addTask}
-                >
-                    追加
-                </button>
-            </div>
-            {msg && <p className="text-sm mb-4">{msg}</p>}
+            {/* ===== シェル（サイドバー + メイン） ===== */}
+            <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 p-4 sm:grid-cols-[220px_minmax(0,1fr)]">
+                {/* ===== サイドバー（sm以上で表示） ===== */}
+                <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
+                    <nav className="space-y-1">
+                        <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                            メニュー
+                        </div>
+                        <a
+                            href="/home"
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                        >
+                            <span>📋</span> <span>タスク</span>
+                        </a>
+                        <a
+                            href="/terms"
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                        >
+                            <span>📄</span> <span>利用規約</span>
+                        </a>
+                        <a
+                            href="/privacy"
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                        >
+                            <span>🔒</span> <span>プライバシー</span>
+                        </a>
 
-            {/* 一覧テーブル */}
-            <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                    <thead>
-                        <tr className="bg-gray-100">
-                            <th className="border p-2 text-left">タイトル</th>
-                            <th className="border p-2 text-left">完了</th>
-                            <th className="border p-2 text-left">作成日時</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {tasks.length === 0 && (
-                            <tr>
-                                <td className="border p-2" colSpan={3}>
-                                    タスクはまだありません
-                                </td>
-                            </tr>
+                        <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
+
+                        <button
+                            onClick={logout}
+                            className="flex w-full items-center justify-between rounded-lg bg-gray-50 px-3 py-2 text-left text-sm hover:bg-gray-100 dark:bg-gray-800/60 dark:hover:bg-gray-800"
+                        >
+                            <span className="flex items-center gap-2">
+                                <span>🚪</span> <span>ログアウト</span>
+                            </span>
+                            <span className="text-[10px] text-gray-400">Ctrl+L</span>
+                        </button>
+                    </nav>
+                </aside>
+
+                {/* ===== メインコンテンツ ===== */}
+                <main className="space-y-4">
+                    {/* ウェルカム / アクションバー */}
+                    <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+                        <div className="mb-2 flex flex-wrap items-end justify-between gap-3">
+                            <div>
+                                <h1 className="text-lg font-semibold">ようこそ、{email} さん</h1>
+                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                    今日のタスクを追加・管理しましょう
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* 追加フォーム */}
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                            <input
+                                className="w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
+                                placeholder="新しいタスクのタイトルを入力…（例：仕様書のレビュー）"
+                                value={newTitle}
+                                onChange={(e) => setNewTitle(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') addTask();
+                                }}
+                            />
+                            <button
+                                onClick={addTask}
+                                className="whitespace-nowrap rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99]"
+                            >
+                                追加する
+                            </button>
+                        </div>
+
+                        {msg && (
+                            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                                {msg}
+                            </p>
                         )}
-                        {tasks.map((t) => (
-                            <tr key={t.id}>
-                                <td className="border p-2">{t.title}</td>
-                                <td className="border p-2">{t.done ? '✔︎' : '-'}</td>
-                                <td className="border p-2">
-                                    {new Date(t.created_at).toLocaleString()}
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+                    </section>
+
+                    {/* タスク一覧 */}
+                    <section className="rounded-2xl border border-gray-200 bg-white p-0 dark:border-gray-800 dark:bg-gray-900">
+                        <div className="border-b border-gray-200 p-4 dark:border-gray-800">
+                            <h2 className="text-sm font-semibold">タスク一覧</h2>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                            <table className="w-full border-collapse text-sm">
+                                <thead>
+                                    <tr className="bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                                        <th className="border-b border-gray-200 px-4 py-2 text-left dark:border-gray-800">
+                                            タイトル
+                                        </th>
+                                        <th className="border-b border-gray-200 px-4 py-2 text-left dark:border-gray-800">
+                                            完了
+                                        </th>
+                                        <th className="border-b border-gray-200 px-4 py-2 text-left dark:border-gray-800">
+                                            作成日時
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody className="text-gray-900 dark:text-gray-100">
+                                    {tasks.length === 0 && (
+                                        <tr>
+                                            <td className="px-4 py-6 text-center text-gray-500 dark:text-gray-400" colSpan={3}>
+                                                タスクはまだありません。上のフォームから追加してください。
+                                            </td>
+                                        </tr>
+                                    )}
+                                    {tasks.map((t, idx) => (
+                                        <tr
+                                            key={t.id}
+                                            className={idx % 2 === 0
+                                                ? 'bg-white dark:bg-gray-900'
+                                                : 'bg-gray-50 dark:bg-gray-950'}
+                                        >
+                                            <td className="border-t border-gray-100 px-4 py-3 dark:border-gray-800">
+                                                {t.title}
+                                            </td>
+                                            <td className="border-t border-gray-100 px-4 py-3 dark:border-gray-800">
+                                                {t.done ? '✔︎' : '—'}
+                                            </td>
+                                            <td className="border-t border-gray-100 px-4 py-3 dark:border-gray-800">
+                                                {new Date(t.created_at).toLocaleString()}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    {/* フッター */}
+                    <footer className="px-1 py-6 text-center text-[11px] text-gray-500 dark:text-gray-500">
+                        このアプリは学習目的のデモです。ログインすると利用規約に同意したものとみなされます。&nbsp;
+                        <a href="/terms" className="underline hover:no-underline">利用規約</a>
+                        <span className="mx-1">/</span>
+                        <a href="/privacy" className="underline hover:no-underline">プライバシー</a>
+                    </footer>
+                </main>
             </div>
-        </main>
+        </div>
     );
 }
