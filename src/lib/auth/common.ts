@@ -6,7 +6,7 @@ import { SignJWT, jwtVerify, JWTPayload } from 'jose';
 import crypto from 'crypto';
 
 const isProd = process.env.NODE_ENV === 'production';
-const SAMESITE: 'lax' | 'none' = 'lax'; // クロスドメインが必要なら 'none' にし、HTTPS必須
+const SAMESITE: 'lax' | 'none' = 'lax'; // クロスドメインが必要なら 'none'（HTTPS必須）
 
 export const COOKIE_ACCESS = 'auth';
 export const COOKIE_REFRESH = 'refresh';
@@ -75,7 +75,7 @@ export async function requireCsrf() {
 }
 
 /**
- * Cookie セット用ラッパー
+ * Cookie セット用ラッパー（NextResponse 想定）
  */
 export function setAccessCookie(res: NextResponse, token: string) {
     res.cookies.set(COOKIE_ACCESS, token, {

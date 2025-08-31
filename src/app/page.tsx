@@ -39,13 +39,13 @@ export default function Page() {
         console.log('csrf:', csrf);
 
         const res = await fetch('/api/protected', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': csrf
-        },
-        credentials: 'include',
-        body: JSON.stringify({})
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrf
+            },
+            credentials: 'include',
+            body: JSON.stringify({})
         });
         const data = await res.json();
         setMsg(res.ok ? `Protected OK: ${data.data}` : `Protected NG: ${data.error}`);
