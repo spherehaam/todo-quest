@@ -1,15 +1,7 @@
 export const runtime = 'nodejs';
 
-import { NextResponse } from 'next/server';
+import { handleLogout } from '@/lib/auth/logout';
 
-export async function GET() {
-    const res = NextResponse.json({ ok: true });
-    res.cookies.set({
-        name: 'auth',
-        value: '',
-        httpOnly: true,
-        path: '/',
-        maxAge: 0
-    });
-    return res;
+export async function POST() {
+    return handleLogout();
 }
