@@ -21,7 +21,7 @@ function readCookie(name: string) {
 function useIsLocalhost() {
     const [isLocal, setIsLocal] = useState(false);
     useEffect(() => {
-        setIsLocal(/^(localhost|127\.0\.0\.1)$/.test(window.location.hostname));
+        setIsLocal(/^(localhost|192\.168\.10\.103)$/.test(window.location.hostname));
     }, []);
     return isLocal;
 }
@@ -191,13 +191,6 @@ export default function Page() {
                         </button>
                     </form>
 
-                    {/* 結果メッセージ */}
-                    {msg && (
-                        <p className="mt-4 text-sm text-gray-700 dark:text-gray-300">
-                            {msg}
-                        </p>
-                    )}
-
                     {/* デバッグボタン群：ローカルのみ表示（マウント後に切り替わる） */}
                     {isLocal && (
                         <div className="mt-6">
@@ -230,6 +223,13 @@ export default function Page() {
                                     ログアウト
                                 </button>
                             </div>
+
+                            {/* メッセージ表示 */}
+                            {msg && (
+                                <p className="mt-4 text-sm text-gray-700 dark:text-gray-300">
+                                    aaa:{msg}:bbb
+                                </p>
+                            )}
                         </div>
                     )}
                 </div>
