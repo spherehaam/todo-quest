@@ -227,7 +227,7 @@ export default function Page() {
                             {/* メッセージ表示 */}
                             {msg && (
                                 <p className="mt-4 text-sm text-gray-700 dark:text-gray-300">
-                                    aaa:{msg}:bbb
+                                    {msg}
                                 </p>
                             )}
                         </div>

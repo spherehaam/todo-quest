@@ -11,7 +11,7 @@ import {
 // DB上の tasks テーブルに対応する型定義
 export type Task = {
     id: string;
-    user_id: string;
+    owner_id: string;
     title: string;
     done: boolean;
     created_at: string;
@@ -22,9 +22,9 @@ export type Task = {
  */
 async function dbGetTasks(userId: string): Promise<Task[]> {
     const rows = await sql`
-        SELECT id, user_id, title, done, created_at
+        SELECT id, owner_id, title, description, due_date, created_at
         FROM tasks
-        WHERE user_id = ${userId}
+        WHERE owner_id = ${userId}
         ORDER BY created_at DESC
     `;
     return rows as Task[];
@@ -33,11 +33,11 @@ async function dbGetTasks(userId: string): Promise<Task[]> {
 /**
  * 新しいタスクをDBに挿入して返す
  */
-async function dbCreateTask(userId: string, title: string): Promise<Task> {
+async function dbCreateTask(userId: string, title: string, description: string, due_date: string): Promise<Task> {
     const rows = await sql`
-        INSERT INTO tasks (user_id, title)
-        VALUES (${userId}, ${title})
-        RETURNING id, user_id, title, done, created_at
+        INSERT INTO tasks (owner_id, title, description, due_date)
+        VALUES (${userId}, ${title}, ${description}, ${due_date})
+        RETURNING id, owner_id, title, done, created_at
     `;
     return rows[0] as Task;
 }
@@ -46,7 +46,7 @@ async function dbCreateTask(userId: string, title: string): Promise<Task> {
  * GET /api/tasks
  * 認証済みユーザーのタスク一覧を返す
  */
-export async function GET() {
+export async function handleGetTasks() {
     try {
         // アクセストークンをCookieから取得
         const token = await readAccessTokenFromCookie();
@@ -74,7 +74,7 @@ export async function GET() {
  * 認証 + CSRF 検証を通過した場合にタスクを1件作成する
  * body: { title: string }
  */
-export async function POST(req: Request) {
+export async function handlePostTasks(req: Request) {
     try {
         // アクセストークン検証
         const token = await readAccessTokenFromCookie();
@@ -90,7 +90,7 @@ export async function POST(req: Request) {
         await requireCsrf();
 
         // リクエストBodyをパース
-        type Body = { title?: string };
+        type Body = { title?: string, description?: string, due_date?: string };
         let body: Body = {};
         try {
             body = (await req.json()) as Body;
@@ -106,9 +106,11 @@ export async function POST(req: Request) {
                 { status: 400 }
             );
         }
+        const description = (body?.description ?? '').trim();
+        const due_date = (body?.due_date ?? '').trim();
 
         // DBに新規タスク作成
-        const task = await dbCreateTask(String(payload.sub), title);
+        const task = await dbCreateTask(String(payload.sub), title, description, due_date);
         return NextResponse.json({ ok: true, task }, { status: 201 });
     } catch (e) {
         // CSRF mismatch とそれ以外でステータスを分ける
