@@ -8,7 +8,9 @@ import {
     requireCsrf,
 } from '@/lib/auth/common';
 
-// DB上の tasks テーブルに対応する型定義
+// ---------------------------------------------------------
+// 型定義
+// ---------------------------------------------------------
 export type Task = {
     id: string;
     owner_id: string;
@@ -19,12 +21,20 @@ export type Task = {
     created_at: string; // ISO文字列
 };
 
-/** 許可ステータス */
-const ALLOWED_STATUS = new Set(['open', 'in_progress', 'done'] as const);
+type Status = Task['status'];
 
-/**
- * ユーザーのタスク一覧をDBから取得する
- */
+// 許可ステータス（読み取り専用の Set と配列）
+const STATUS_VALUES = ['open', 'in_progress', 'done'] as const;
+const ALLOWED_STATUS: ReadonlySet<Status> = new Set<Status>(STATUS_VALUES);
+
+/** status の型ガード */
+function isStatus(value: unknown): value is Status {
+    return typeof value === 'string' && (STATUS_VALUES as readonly string[]).includes(value);
+}
+
+// ---------------------------------------------------------
+// DB アクセス
+// ---------------------------------------------------------
 async function dbGetTasks(userId: string): Promise<Task[]> {
     const rows = await sql`
         SELECT id, owner_id, title, description, due_date, status, created_at
@@ -43,11 +53,10 @@ async function dbCreateTask(params: {
     title: string;
     description: string | null;
     due_date: string | null; // ISO or null
-    status: 'open' | 'in_progress' | 'done';
+    status: Status;
 }): Promise<Task> {
     const { userId, title, description, due_date, status } = params;
 
-    // due_date は timestamptz にキャスト（nullはそのまま）
     const rows = await sql`
         INSERT INTO tasks (owner_id, title, description, due_date, status)
         VALUES (${userId}, ${title}, ${description}, ${due_date ? new Date(due_date) : null}, ${status})
@@ -110,7 +119,7 @@ export async function handlePostTasks(req: Request) {
             title?: string;
             description?: string;
             due_date?: string;
-            status?: 'open' | 'in_progress' | 'done' | string;
+            status?: Status | string; // 外部入力なので string も受ける
         };
 
         let body: Body = {};
@@ -120,7 +129,7 @@ export async function handlePostTasks(req: Request) {
             body = {};
         }
 
-        // title必須
+        // title 必須
         const title = (body?.title ?? '').trim();
         if (!title) {
             return NextResponse.json(
@@ -142,19 +151,15 @@ export async function handlePostTasks(req: Request) {
             }
         }
 
-        // status（未指定は open）。不正値は 400。
-        const incomingStatus = (body?.status ?? 'open') as string;
-        const status =
-            ALLOWED_STATUS.has(incomingStatus as any)
-                ? (incomingStatus as Task['status'])
-                : null;
-
-        if (!status) {
+        // status（未指定は open）。isStatus で厳密チェック
+        const incomingStatus = body?.status ?? 'open';
+        if (!isStatus(incomingStatus)) {
             return NextResponse.json(
                 { ok: false, error: 'invalid_status' },
                 { status: 400 }
             );
         }
+        const status: Status = incomingStatus;
 
         const task = await dbCreateTask({
             userId: String(payload.sub),
