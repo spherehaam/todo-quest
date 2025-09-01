@@ -26,13 +26,13 @@ body {
 }
 
 @layer utilities {
-    /* ライト時は標準UI（黒アイコン想定） */
-    input[type="date"] {
-        color-scheme: light;
-    }
+  /* ライト時は標準UI（黒アイコン想定） */
+  input[type="date"] {
+    color-scheme: light;
+  }
 
-    /* ダーク時は標準のダークUI（白寄りアイコン/UI） */
-    html.dark input[type="date"] {
-        color-scheme: dark;
-    }
+  /* ダーク時は標準のダークUI（白寄りアイコン/UI） */
+  html.dark input[type="date"] {
+    color-scheme: dark;
+  }
 }

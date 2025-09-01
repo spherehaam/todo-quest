@@ -6,7 +6,7 @@ import { readAccessTokenFromCookie, verifyAccess } from '@/lib/auth/common';
 
 /**
  * 認証が必要なページ用のレイアウト
- * 
+ *
  * - サーバーコンポーネントとして実行されるため、初期レンダリング時に
  *   クライアントへ返す前に認証チェックが走る。
  * - ログインしていない場合や JWT が不正な場合は `/login` に即リダイレクト。
@@ -15,7 +15,11 @@ import { readAccessTokenFromCookie, verifyAccess } from '@/lib/auth/common';
 export default async function ProtectedLayout({ children }: { children: ReactNode }) {
     // Cookie からアクセストークンを取得
     const token = await readAccessTokenFromCookie();
-    if (!token) redirect('/login'); // トークンが無ければ即ログインページへ
+
+    if (!token) {
+        // トークンが無ければ即ログインページへ
+        redirect('/login');
+    }
 
     try {
         // JWT を検証（署名や有効期限を確認）

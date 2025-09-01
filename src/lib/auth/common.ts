@@ -33,7 +33,10 @@ export const REFRESH_TTL_SEC = 7 * 24 * 60 * 60; // リフレッシュトーク�
  */
 function getSecret() {
     const s = process.env.JWT_SECRET;
-    if (!s) throw new Error('JWT_SECRET is not set');
+    if (!s) {
+        throw new Error('JWT_SECRET is not set');
+    }
+
     return new TextEncoder().encode(s);
 }
 
@@ -87,7 +90,11 @@ export async function verifyAccess(token: string) {
     const { payload } = await jwtVerify(token, getSecret(), {
         algorithms: ['HS256'],
     });
-    if (payload.typ !== 'access') throw new Error('wrong token type');
+
+    if (payload.typ !== 'access') {
+        throw new Error('wrong token type');
+    }
+
     return payload as JWTPayload & { email: string };
 }
 
@@ -99,7 +106,10 @@ export async function verifyRefresh(token: string) {
     const { payload } = await jwtVerify(token, getSecret(), {
         algorithms: ['HS256'],
     });
-    if (payload.typ !== 'refresh') throw new Error('wrong token type');
+    if (payload.typ !== 'refresh') {
+        throw new Error('wrong token type');
+    }
+
     return payload as JWTPayload & { email: string; jti: string };
 }
 

@@ -147,15 +147,13 @@ export default function Page() {
                             <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
                                 メールアドレス
                             </label>
-                            <input
-                                className="w-full rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-3 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-4 focus:ring-black/10 dark:focus:ring-white/10 transition"
+                            <input className="w-full rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-3 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-4 focus:ring-black/10 dark:focus:ring-white/10 transition"
                                 type="email"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 placeholder="you@example.com"
                                 autoComplete="username"
-                                required
-                            />
+                                required/>
                         </div>
 
                         <div>
@@ -163,30 +161,24 @@ export default function Page() {
                                 パスワード
                             </label>
                             <div className="relative">
-                                <input
-                                    className="w-full rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-3 pr-12 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-4 focus:ring-black/10 dark:focus:ring-white/10 transition"
+                                <input className="w-full rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-3 pr-12 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-4 focus:ring-black/10 dark:focus:ring-white/10 transition"
                                     type={showPassword ? 'text' : 'password'}
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
                                     placeholder="••••••••"
                                     autoComplete="current-password"
-                                    required
-                                />
-                                <button
-                                    type="button"
+                                    required/>
+                                <button type="button"
                                     onClick={() => setShowPassword((v) => !v)}
                                     className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition"
-                                    aria-label="パスワード表示切替"
-                                >
+                                    aria-label="パスワード表示切替">
                                     {showPassword ? '隠す' : '表示'}
                                 </button>
                             </div>
                         </div>
 
-                        <button
-                            className="w-full rounded-xl bg-black text-white py-3 font-medium shadow-sm hover:shadow-md active:scale-[0.99] transition disabled:opacity-60 disabled:cursor-not-allowed"
-                            disabled={submitting}
-                        >
+                        <button className="w-full rounded-xl bg-black text-white py-3 font-medium shadow-sm hover:shadow-md active:scale-[0.99] transition disabled:opacity-60 disabled:cursor-not-allowed"
+                            disabled={submitting}>
                             {submitting ? 'ログイン中…' : 'ログイン'}
                         </button>
                     </form>
@@ -198,28 +190,20 @@ export default function Page() {
                                 Debug (local only)
                             </div>
                             <div className="grid grid-cols-2 gap-2">
-                                <button
-                                    className="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 transition"
-                                    onClick={me}
-                                >
+                                <button className="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 transition"
+                                    onClick={me}>
                                     状態確認
                                 </button>
-                                <button
-                                    className="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 transition"
-                                    onClick={callProtected}
-                                >
+                                <button className="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 transition"
+                                    onClick={callProtected}>
                                     保護POST
                                 </button>
-                                <button
-                                    className="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 transition"
-                                    onClick={refresh}
-                                >
+                                <button className="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 transition"
+                                    onClick={refresh}>
                                     リフレッシュ
                                 </button>
-                                <button
-                                    className="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 transition"
-                                    onClick={logout}
-                                >
+                                <button className="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 transition"
+                                    onClick={logout}>
                                     ログアウト
                                 </button>
                             </div>

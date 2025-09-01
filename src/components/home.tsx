@@ -7,9 +7,9 @@ import { useRouter } from 'next/navigation';
 type Task = {
     id: string;
     title: string;
-    details?: string | null;
+    description?: string | null;
     due_date?: string | null;
-    done: boolean;
+    status: 'open' | 'in_progress' | 'done';
     created_at: string;
 };
 
@@ -30,10 +30,32 @@ function readCookie(name: string) {
 
 /** 日時文字列の整形（ISO/任意→ローカル表示）。不正値は "-" 表示 */
 function fmtDate(input?: string | null): string {
-    if (!input) return '-';
+    if (!input) {
+        return '-';
+    }
+
     const d = new Date(input);
-    if (isNaN(d.getTime())) return '-';
+
+    if (isNaN(d.getTime())) {
+        return '-';
+    }
+
     return d.toLocaleString();
+}
+
+/** 日付のみの整形（不正値は "-"） */
+function fmtDateOnly(input?: string | null): string {
+    if (!input) {
+        return '-';
+    }
+
+    const d = new Date(input);
+
+    if (isNaN(d.getTime())) {
+        return '-';
+    }
+
+    return d.toLocaleDateString();
 }
 
 export default function HomePage() {
@@ -42,9 +64,9 @@ export default function HomePage() {
     const [tasks, setTasks] = useState<Task[]>([]);
 
     const [newTitle, setNewTitle] = useState('');
-    const [newDetails, setNewDetails] = useState('');
+    const [newDescription, setNewDescription] = useState('');
     const [newDueLocal, setNewDueLocal] = useState('');
-    const [newDone, setNewDone] = useState(false);
+    const [newStatus, setNewStatus] = useState<'open' | 'in_progress' | 'done'>('open');
 
     const [msg, setMsg] = useState('');
     const [users, serUsers] = useState<Users[]>([]);
@@ -64,6 +86,7 @@ export default function HomePage() {
             // 2) タスク一覧取得
             await fetchTasks();
 
+            // 3) ユーザー情報取得
             await fetchUsers();
             setLoading(false);
         }
@@ -102,11 +125,13 @@ export default function HomePage() {
         const csrf = readCookie('csrf_token') ?? '';
         const payload: Record<string, unknown> = {
             title,
-            done: newDone
+            status: newStatus
         };
 
-        const details = newDetails.trim();
-        if (details) payload.details = details;
+        const description = newDescription.trim();
+        if (description) {
+            payload.description = description;
+        }
 
         if (newDueLocal) {
             const d = new Date(newDueLocal);
@@ -129,9 +154,9 @@ export default function HomePage() {
         if (res.ok) {
             setTasks((prev) => [data.task as Task, ...prev]);
             setNewTitle('');
-            setNewDetails('');
+            setNewDescription('');
             setNewDueLocal('');
-            setNewDone(false);
+            setNewStatus('open');
             setMsg('追加しました');
         } else {
             setMsg(`追加に失敗: ${data.error ?? 'unknown error'}`);
@@ -184,10 +209,7 @@ export default function HomePage() {
                         <span className="hidden text-xs text-gray-500 dark:text-gray-400 sm:inline">
                             {email ?? 'Guest'}
                         </span>
-                        <button
-                            onClick={logout}
-                            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800"
-                        >
+                        <button onClick={logout} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800">
                             ログアウト
                         </button>
                     </div>
@@ -196,33 +218,26 @@ export default function HomePage() {
 
             {/* ===== シェル（サイドバー + メイン） ===== */}
             <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 p-4 sm:grid-cols-[220px_minmax(0,1fr)]">
-                {/* ===== サイドバー（sm以上で表示） ===== */}
+                {/* ===== サイドバー ===== */}
                 <aside className="sticky top-16 hidden h[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
                     <nav className="space-y-1">
                         <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
                             メニュー
                         </div>
-                        <a
-                            href="/home"
-                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-                        >
+                        <a href="/home"
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
                             <span>📋</span> <span>タスク</span>
                         </a>
-                        {/* <a
-                            href="/terms"
-                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-                        >
+                        {/* <a href="/terms"
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
                             <span>📄</span> <span>利用規約</span>
                         </a> */}
-                        {/* <a
-                            href="/privacy"
-                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-                        >
+                        {/* <a href="/privacy"
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
                             <span>🔒</span> <span>プライバシー</span>
                         </a> */}
 
                         <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
-
                     </nav>
                 </aside>
 
@@ -234,42 +249,32 @@ export default function HomePage() {
 
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
                             {/* 1行目 */}
-                            <input
-                                className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
+                            <input className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
                                 placeholder="タイトル"
                                 value={newTitle}
-                                onChange={(e) => setNewTitle(e.target.value)}
-                            />
-                            <input
-                                className="sm:col-span-5 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
+                                onChange={(e) => setNewTitle(e.target.value)}/>
+                            <input className="sm:col-span-5 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
                                 placeholder="詳細（任意）"
-                                value={newDetails}
-                                onChange={(e) => setNewDetails(e.target.value)}
-                            />
-                            <input
-                                type="date"
-                                className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950
-                                           dark:[&::-webkit-calendar-picker-indicator]:invert"
+                                value={newDescription}
+                                onChange={(e) => setNewDescription(e.target.value)}/>
+                            <input type="date"
+                                className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950 dark:[&::-webkit-calendar-picker-indicator]:invert"
                                 value={newDueLocal}
-                                onChange={(e) => setNewDueLocal(e.target.value)}
-                            />
+                                onChange={(e) => setNewDueLocal(e.target.value)}/>
 
                             {/* 2行目 */}
-                            <select
-                                className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none focus:ring-2 ring-indigo-500/20 dark:border-gray-800 dark:bg-gray-950"
-                                value={newDone ? 'true' : 'false'}
-                                onChange={(e) => setNewDone(e.target.value === 'true')}
-                            >
-                                <option value="false">未完了</option>
-                                <option value="true">完了</option>
+                            <select className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none focus:ring-2 ring-indigo-500/20 dark:border-gray-800 dark:bg-gray-950"
+                                value={newStatus}
+                                onChange={(e) => setNewStatus(e.target.value as 'open' | 'in_progress' | 'done')}>
+                                <option value="open">未完了</option>
+                                <option value="in_progress">進行中</option>
+                                <option value="done">完了</option>
                             </select>
                         </div>
 
                         <div className="mt-3">
-                            <button
-                                onClick={addTask}
-                                className="rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99]"
-                            >
+                            <button onClick={addTask}
+                                className="rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99]">
                                 追加する
                             </button>
                         </div>
@@ -291,7 +296,7 @@ export default function HomePage() {
                                         <th className="px-4 py-2 text-left">タイトル</th>
                                         <th className="px-4 py-2 text-left">詳細</th>
                                         <th className="px-4 py-2 text-left">期限</th>
-                                        <th className="px-4 py-2 text-left">完了</th>
+                                        <th className="px-4 py-2 text-left">ステータス</th>
                                         <th className="px-4 py-2 text-left">作成日時</th>
                                     </tr>
                                 </thead>
@@ -304,16 +309,15 @@ export default function HomePage() {
                                         </tr>
                                     )}
                                     {tasks.map((t, idx) => (
-                                        <tr
-                                            key={t.id}
-                                            className={idx % 2 === 0
-                                                ? 'bg-white dark:bg-gray-900'
-                                                : 'bg-gray-50 dark:bg-gray-950'}
-                                        >
+                                        <tr key={t.id} className={idx % 2 === 0 ? 'bg-white dark:bg-gray-900' : 'bg-gray-50 dark:bg-gray-950'}>
                                             <td className="px-4 py-3">{t.title}</td>
-                                            <td className="px-4 py-3">{t.details ?? '-'}</td>
-                                            <td className="px-4 py-3">{fmtDate(t.due_date)}</td>
-                                            <td className="px-4 py-3">{t.done ? '✔︎' : '—'}</td>
+                                            <td className="px-4 py-3">{t.description ?? '-'}</td>
+                                            <td className="px-4 py-3">{fmtDateOnly(t.due_date)}</td>
+                                            <td className="px-4 py-3">
+                                                {t.status === 'open' && '未完了'}
+                                                {t.status === 'in_progress' && '進行中'}
+                                                {t.status === 'done' && '完了'}
+                                            </td>
                                             <td className="px-4 py-3">{fmtDate(t.created_at)}</td>
                                         </tr>
                                     ))}

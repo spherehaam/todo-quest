@@ -11,7 +11,7 @@ export default function Footer() {
                     <a className="transition hover:text-blue-600 dark:hover:text-blue-400 underline-offset-4 hover:underline" href="/privacy">プライバシー</a>
                 </nav>
                 <div className="mt-4 text-xs text-gray-400 dark:text-gray-500">
-                    © {new Date().getFullYear()} Demo App
+                    © 2025-{new Date().getFullYear()} ToDo Quest
                 </div>
             </div>
         </footer>
