@@ -1,16 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 
-/** タスクの型定義 */
+type TaskStatus = 'open' | 'in_progress' | 'done';
+
 type Task = {
     id: string;
     title: string;
     description?: string | null;
-    due_date?: string | null;
-    status: 'open' | 'in_progress' | 'done';
-    created_at: string;
+    due_date?: string | null;           // ISO/日付文字列
+    status: TaskStatus;
+    created_at: string;                 // ISO
     contractor: string;
 };
 
@@ -21,7 +22,11 @@ type Users = {
     exp: number;
 };
 
-/** クッキーから値を取得 */
+// ------------------------------
+// ユーティリティ
+// ------------------------------
+
+/** Cookie から値を取得（未設定は undefined） */
 function readCookie(name: string) {
     return document.cookie
         .split('; ')
@@ -29,61 +34,80 @@ function readCookie(name: string) {
         ?.split('=')[1];
 }
 
-/** 日時文字列の整形（ISO/任意→ローカル表示）。不正値は "-" 表示 */
+/** 日時文字列 → ローカル日時表示（不正値は '-'） */
 function fmtDate(input?: string | null): string {
-    if (!input) {
-        return '-';
-    }
+    if (!input) return '-';
     const d = new Date(input);
-    if (isNaN(d.getTime())) {
-        return '-';
-    }
+    if (isNaN(d.getTime())) return '-';
     return d.toLocaleString();
 }
 
-/** 日付のみの整形（不正値は "-"） */
+/** 日付文字列 → ローカル日付表示（不正値は '-'） */
 function fmtDateOnly(input?: string | null): string {
-    if (!input) {
-        return '-';
-    }
+    if (!input) return '-';
     const d = new Date(input);
-    if (isNaN(d.getTime())) {
-        return '-';
-    }
+    if (isNaN(d.getTime())) return '-';
     return d.toLocaleDateString();
 }
 
-/** ===== ステータス編集用 追加分（既存に影響しない形で定義） ===== */
-type TaskStatus = 'open' | 'in_progress' | 'done';
+/** `<input type="date">` の値(YYYY-MM-DD)をそのまま送る。時差ズレ防止のため ISO 変換しない */
+function normalizeDateForApi(localDate: string | undefined): string | undefined {
+    if (!localDate) return undefined;
+    // 年月日形式のみを許容
+    return /^\d{4}-\d{2}-\d{2}$/.test(localDate) ? localDate : undefined;
+}
 
+/** fetch レスポンスの JSON を安全に取得（失敗時は {}） */
+async function safeJson<T = unknown>(res: Response): Promise<T | {}> {
+    try {
+        return (await res.json()) as T;
+    } catch {
+        return {};
+    }
+}
+
+/** 共通 fetch（JSON想定・エラー時に例外） */
+async function fetchJson<T = unknown>(input: RequestInfo, init?: RequestInit): Promise<{ ok: true; data: T } | { ok: false; data: any; status: number }> {
+    const res = await fetch(input, init);
+    const data = await safeJson<T>(res);
+    if (res.ok) {
+        return { ok: true, data: data as T };
+    }
+    return { ok: false, data, status: res.status };
+}
+
+// ------------------------------
+// ステータス表示
+// ------------------------------
 const STATUS_LABEL: Record<TaskStatus, string> = {
     open: '未完了',
     in_progress: '進行中',
-    done: '完了',
+    done: '完了'
 };
-
 const ALL_STATUSES: TaskStatus[] = ['open', 'in_progress', 'done'];
 
-/** ステータス更新API（/api/tasks/[id]/status に PATCH を想定） */
+/** ステータス更新 API */
 async function updateTaskStatus(taskId: string, next: TaskStatus) {
-    const res = await fetch(`/api/tasks/status`, {
+    const csrf = readCookie('csrf_token') ?? '';
+    if (!csrf) {
+        throw new Error('CSRFトークンが見つかりません。ログインし直してください。');
+    }
+    const res = await fetch('/api/tasks/status', {
         method: 'PATCH',
         headers: {
             'Content-Type': 'application/json',
-            'X-CSRF-Token': readCookie('csrf_token') ?? '',
+            'X-CSRF-Token': csrf
         },
         credentials: 'include',
-        body: JSON.stringify({ taskId: taskId, status: next }),
+        body: JSON.stringify({ taskId, status: next })
     });
     if (!res.ok) {
         const msg = await res.text().catch(() => '');
         throw new Error(msg || `Failed to update status (${res.status})`);
     }
-    const json = await res.json().catch(() => ({}));
-    return json as { status: TaskStatus };
+    return (await res.json()) as { status: TaskStatus };
 }
 
-/** ステータスセル（クリックでセレクトに切替 → 楽観的更新） */
 function StatusCell(props: {
     taskId: string;
     value: TaskStatus;
@@ -96,9 +120,7 @@ function StatusCell(props: {
 
     function handleKeyDown(e: React.KeyboardEvent) {
         if (!editing) return;
-        if (e.key === 'Escape') {
-            setEditing(false);
-        }
+        if (e.key === 'Escape') setEditing(false);
     }
 
     async function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
@@ -108,12 +130,12 @@ function StatusCell(props: {
             return;
         }
         const prev = value;
-        onLocalChange(next); // 楽観的更新
+        onLocalChange(next);       // 楽観的更新
         setSaving(true);
         try {
             await updateTaskStatus(taskId, next);
         } catch (err) {
-            onRevert(prev); // 失敗時ロールバック
+            onRevert(prev);        // 失敗時は元に戻す
             console.error(err);
             alert('ステータスの更新に失敗しました。');
         } finally {
@@ -155,11 +177,10 @@ function StatusCell(props: {
         </select>
     );
 }
-/** ===== ここまで既存 ===== */
 
-/** ===== スケルトン & シマー ===== */
-
-/** 上部に表示するシマー進捗バー（ロード中のみ） */
+// ------------------------------
+// スケルトン
+// ------------------------------
 function ShimmerBar() {
     return (
         <div className="h-1 w-full overflow-hidden rounded-full bg-gradient-to-r from-indigo-100 via-blue-100 to-indigo-100 dark:from-indigo-900/40 dark:via-blue-900/40 dark:to-indigo-900/40">
@@ -174,7 +195,6 @@ function ShimmerBar() {
     );
 }
 
-/** サイドバーのスケルトン */
 function SkeletonSidebar() {
     return (
         <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
@@ -190,7 +210,6 @@ function SkeletonSidebar() {
     );
 }
 
-/** 入力フォームのスケルトン */
 function SkeletonForm() {
     return (
         <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
@@ -206,7 +225,6 @@ function SkeletonForm() {
     );
 }
 
-/** タスクテーブルのスケルトン */
 function SkeletonTable() {
     return (
         <section className="rounded-2xl border border-gray-200 bg-white p-0 dark:border-gray-800 dark:bg-gray-900">
@@ -241,75 +259,68 @@ function SkeletonTable() {
     );
 }
 
-/** ===== ここまでスケルトン ===== */
-
+// ------------------------------
+// 画面本体
+// ------------------------------
 export default function HomePage() {
     const [email, setEmail] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [tasks, setTasks] = useState<Task[]>([]);
-
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
-    const [newDueLocal, setNewDueLocal] = useState('');
-    const [newStatus, setNewStatus] = useState<'open' | 'in_progress' | 'done'>('open');
-
+    const [newDueLocal, setNewDueLocal] = useState(''); // YYYY-MM-DD
+    const [newStatus, setNewStatus] = useState<TaskStatus>('open');
     const [msg, setMsg] = useState('');
     const [users, setUsers] = useState<Users[]>([]);
     const router = useRouter();
 
+    // 進行中のリクエスト中断用
+    const abortRef = useRef<AbortController | null>(null);
+    useEffect(() => {
+        return () => abortRef.current?.abort();
+    }, []);
+
+    // 初期ロード
     useEffect(() => {
         async function bootstrap() {
+            setLoading(true);
             try {
-                // 1) 認証確認
-                const meRes = await fetch('/api/me', { credentials: 'include' });
+                abortRef.current?.abort();
+                const controller = new AbortController();
+                abortRef.current = controller;
+
+                // 認証確認
+                const meRes = await fetch('/api/me', { credentials: 'include', signal: controller.signal });
                 if (!meRes.ok) {
-                    router.push('/');
+                    router.replace('/'); // 未ログイン→ログイン画面へ
                     return;
                 }
                 const me = await meRes.json();
-                setEmail(me.email);
+                setEmail(me.email ?? null);
 
-                // 2) ユーザー取得（配列を返す）
-                const usersFetched = await fetchUsers();
+                // ユーザー一覧
+                const uRes = await fetchJson<{ users: Users[] }>('/api/users', { credentials: 'include', signal: controller.signal as any });
+                const list = uRes.ok ? uRes.data.users ?? [] : [];
+                setUsers(list);
 
-                // 3) タスク一覧取得
-                if (usersFetched.length > 0) {
-                    await fetchTasks(usersFetched[0].id);
+                // とりあえず先頭ユーザーでタスク取得（※本来は選択UIが望ましい）
+                const contractor = list[0]?.id;
+                const url = contractor ? `/api/tasks?contractor=${encodeURIComponent(contractor)}` : '/api/tasks';
+                const tRes = await fetchJson<{ tasks: Task[] }>(url, { credentials: 'include', signal: controller.signal as any });
+                setTasks(tRes.ok ? tRes.data.tasks ?? [] : []);
+            } catch (e: any) {
+                if (e?.name !== 'AbortError') {
+                    console.error(e);
+                    setMsg('初期読み込みに失敗しました。');
                 }
             } finally {
                 setLoading(false);
             }
         }
-
-        async function fetchTasks(contractor?: string) {
-            const url = contractor
-                ? `/api/tasks?contractor=${encodeURIComponent(contractor)}`
-                : `/api/tasks`;
-
-            const res = await fetch(url, { credentials: 'include' });
-            if (res.ok) {
-                const data = await res.json();
-                setTasks(data.tasks ?? []);
-            } else {
-                setTasks([]);
-            }
-        }
-
-        async function fetchUsers(): Promise<Array<{ id: string }>> {
-            const res = await fetch('/api/users', { credentials: 'include' });
-            if (!res.ok) {
-                setUsers([]);
-                return [];
-            }
-            const data = await res.json();
-            setUsers(data.users ?? []);
-            return data.users ?? [];
-        }
-
         bootstrap();
     }, [router]);
 
-    // 状態が更新された「後」の users を見たい場合は、別の useEffect でログ
+    // デバッグログ（必要なければ削除OK）
     useEffect(() => {
         if (users.length > 0) {
             console.log('users (state changed):', users);
@@ -317,7 +328,15 @@ export default function HomePage() {
         }
     }, [users]);
 
-    /** タスク追加 */
+    /** 新規タスク作成 */
+    type NewTaskPayload = {
+        title: string;
+        description?: string;
+        due_date?: string;     // YYYY-MM-DD を推奨
+        status: TaskStatus;
+        contractor?: string;   // 受注者
+    };
+
     async function addTask() {
         const title = newTitle.trim();
         if (!title) {
@@ -326,24 +345,24 @@ export default function HomePage() {
         }
 
         const csrf = readCookie('csrf_token') ?? '';
-        const payload: Record<string, unknown> = {
+        if (!csrf) {
+            setMsg('CSRFトークンが見つかりません。ログインし直してください。');
+            return;
+        }
+
+        const payload: NewTaskPayload = {
             title,
             status: newStatus
         };
 
         const description = newDescription.trim();
-        if (description) {
-            (payload as any).description = description;
-        }
+        if (description) payload.description = description;
 
-        if (newDueLocal) {
-            const d = new Date(newDueLocal);
-            if (!isNaN(d.getTime())) {
-                (payload as any).due_date = d.toISOString();
-            }
-        }
+        const dateForApi = normalizeDateForApi(newDueLocal);
+        if (dateForApi) payload.due_date = dateForApi;
 
-        (payload as any).contractor = users[0]?.id;
+        // users[0] 依存は脆いので存在チェック
+        if (users[0]?.id) payload.contractor = users[0].id;
 
         const res = await fetch('/api/tasks', {
             method: 'POST',
@@ -355,53 +374,55 @@ export default function HomePage() {
             body: JSON.stringify(payload)
         });
 
-        const data = await res.json();
-        if (res.ok) {
-            setTasks((prev) => [data.task as Task, ...prev]);
+        const data = await safeJson<{ task: Task; error?: string }>(res);
+        if (res.ok && (data as any)?.task) {
+            const { task } = data as any;
+            setTasks((prev) => [task as Task, ...prev]);
             setNewTitle('');
             setNewDescription('');
             setNewDueLocal('');
             setNewStatus('open');
             setMsg('追加しました');
         } else {
-            setMsg(`追加に失敗: ${data.error ?? 'unknown error'}`);
+            setMsg(`追加に失敗: ${(data as any)?.error ?? 'unknown error'}`);
         }
     }
 
     /** ログアウト */
     async function logout() {
         const csrf = readCookie('csrf_token') ?? '';
-        await fetch('/api/logout', {
-            method: 'POST',
-            headers: { 'X-CSRF-Token': csrf },
-            credentials: 'include'
-        });
-        router.push('/');
+        if (!csrf) {
+            setMsg('CSRFトークンが見つかりません。');
+            return;
+        }
+        try {
+            await fetch('/api/logout', {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': csrf },
+                credentials: 'include'
+            });
+        } finally {
+            router.push('/');
+        }
     }
 
     return (
         <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
-            {/* ===== ヘッダー ===== */}
             <header className="sticky top-0 z-30 border-b border-gray-200/70 bg-white/80 backdrop-blur dark:border-gray-800 dark:bg-gray-900/70">
                 <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-                    {/* ロゴ / ブランド */}
                     <div className="flex items-center gap-2">
                         <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600" />
-                        <span className="text-sm font-semibold tracking-wide">
-                            TodoQuest
-                        </span>
+                        <span className="text-sm font-semibold tracking-wide">TodoQuest</span>
                     </div>
 
-                    {/* ユーザー */}
-                    {/* <div className="flex items-center gap-2">
+                    {/* レベル表示：exp/exp は同値になっていたので、必要に応じて maxExp を導入してください */}
+                    {/* <div className="flex items-center gap-2" aria-label="ユーザー情報">
                         レベル
-                        {users.map((u, idx) => (
-                            <p key={u.id}>{u.level}　　経験値 {u.exp} / {u.exp}</p>
-                            // <div key={u.id}>{u.id} : {u.username} : {u.level} : {u.exp} : {idx}</div>
+                        {users.map((u) => (
+                            <p key={u.id}> {u.level}　経験値 {u.exp}</p>
                         ))}
                     </div> */}
 
-                    {/* ログアウト */}
                     <div className="flex items-center gap-3">
                         <span className="hidden text-xs text-gray-500 dark:text-gray-400 sm:inline">
                             {loading ? 'Loading…' : (email ?? 'Guest')}
@@ -415,30 +436,28 @@ export default function HomePage() {
                         </button>
                     </div>
                 </div>
-                {loading && <div className="px-4"><div className="mx-auto max-w-6xl py-1"><ShimmerBar /></div></div>}
+                {loading && (
+                    <div className="px-4">
+                        <div className="mx-auto max-w-6xl py-1">
+                            <ShimmerBar />
+                        </div>
+                    </div>
+                )}
             </header>
 
-            {/* ===== シェル（サイドバー + メイン） ===== */}
             <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 p-4 sm:grid-cols-[220px_minmax(0,1fr)]">
-                {/* ===== サイドバー ===== */}
                 {loading ? (
                     <SkeletonSidebar />
                 ) : (
                     <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
-                        <nav className="space-y-1">
+                        <nav className="space-y-1" aria-label="サイドバー">
                             <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
                                 メニュー
                             </div>
-                            <a
-                                href="/home"
-                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-                            >
+                            <a href="/home" className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
                                 <span>📋</span> <span>ホーム</span>
                             </a>
-                            <a
-                                href="/bbs"
-                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-                            >
+                            <a href="/bbs" className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
                                 <span>📋</span> <span>タスク掲示板</span>
                             </a>
                             <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
@@ -446,7 +465,6 @@ export default function HomePage() {
                     </aside>
                 )}
 
-                {/* ===== メインコンテンツ ===== */}
                 <main className="space-y-4" aria-busy={loading} aria-live="polite">
                     {loading ? (
                         <>
@@ -455,36 +473,38 @@ export default function HomePage() {
                         </>
                     ) : (
                         <>
-                            {/* 入力フォーム */}
+                            {/* タスク追加フォーム */}
                             <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
                                 <h1 className="mb-2 text-lg font-semibold">ようこそ、{email} さん</h1>
 
                                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
-                                    {/* 1行目 */}
                                     <input
                                         className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
                                         placeholder="タイトル"
                                         value={newTitle}
                                         onChange={(e) => setNewTitle(e.target.value)}
+                                        aria-label="タイトル"
                                     />
                                     <input
                                         className="sm:col-span-5 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
                                         placeholder="詳細（任意）"
                                         value={newDescription}
                                         onChange={(e) => setNewDescription(e.target.value)}
+                                        aria-label="詳細"
                                     />
                                     <input
                                         type="date"
                                         className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950 dark:[&::-webkit-calendar-picker-indicator]:invert"
                                         value={newDueLocal}
                                         onChange={(e) => setNewDueLocal(e.target.value)}
+                                        aria-label="期限"
                                     />
 
-                                    {/* 2行目 */}
                                     <select
                                         className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
                                         value={newStatus}
-                                        onChange={(e) => setNewStatus(e.target.value as 'open' | 'in_progress' | 'done')}
+                                        onChange={(e) => setNewStatus(e.target.value as TaskStatus)}
+                                        aria-label="ステータス"
                                     >
                                         <option value="open">未完了</option>
                                         <option value="in_progress">進行中</option>
@@ -501,9 +521,7 @@ export default function HomePage() {
                                     </button>
                                 </div>
 
-                                {msg && (
-                                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{msg}</p>
-                                )}
+                                {msg && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{msg}</p>}
                             </section>
 
                             {/* タスク一覧 */}
@@ -531,10 +549,7 @@ export default function HomePage() {
                                                 </tr>
                                             )}
                                             {tasks.map((t, idx) => (
-                                                <tr
-                                                    key={t.id}
-                                                    className={idx % 2 === 0 ? 'bg-white dark:bg-gray-900' : 'bg-gray-50 dark:bg-gray-950'}
-                                                >
+                                                <tr key={t.id} className={idx % 2 === 0 ? 'bg-white dark:bg-gray-900' : 'bg-gray-50 dark:bg-gray-950'}>
                                                     <td className="px-4 py-3">{t.title}</td>
                                                     <td className="px-4 py-3">{t.description ?? '-'}</td>
                                                     <td className="px-4 py-3">{fmtDateOnly(t.due_date)}</td>
@@ -543,18 +558,10 @@ export default function HomePage() {
                                                             taskId={t.id}
                                                             value={t.status}
                                                             onLocalChange={(next) => {
-                                                                setTasks((prev) =>
-                                                                    prev.map((x) =>
-                                                                        x.id === t.id ? { ...x, status: next } : x
-                                                                    )
-                                                                );
+                                                                setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: next } : x)));
                                                             }}
                                                             onRevert={(prevStatus) => {
-                                                                setTasks((prev) =>
-                                                                    prev.map((x) =>
-                                                                        x.id === t.id ? { ...x, status: prevStatus } : x
-                                                                    )
-                                                                );
+                                                                setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: prevStatus } : x)));
                                                             }}
                                                         />
                                                     </td>

@@ -85,11 +85,22 @@ async function dbUpdateTaskStatus(params: {
 
 async function dbGetTasksBbs(): Promise<Task[]> {
     const rows = await sql`
-        SELECT id, owner_id, title, description, due_date, status, created_at, contractor
-        FROM tasks
-        WHERE contractor IS NULL
-        AND status = 'open'
-        ORDER BY created_at DESC
+        SELECT
+            t.id,
+            t.owner_id,
+            u.username AS owner_name,
+            t.title,
+            t.description,
+            t.due_date,
+            t.status,
+            t.created_at,
+            t.contractor
+        FROM tasks t
+        LEFT JOIN users u
+        ON u.id = t.owner_id
+        WHERE t.contractor IS NULL
+        AND t.status = 'open'
+        ORDER BY t.created_at DESC
     `;
     return rows as Task[];
 }

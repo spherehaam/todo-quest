@@ -1,30 +1,38 @@
 'use client';
 
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
-/** タスクの型定義（DBスキーマ準拠） */
+// ------------------------------
+// 型定義
+// ------------------------------
+type TaskStatus = 'open' | 'in_progress' | 'done';
+
 type Task = {
     id: string;
     owner_id: string;
+    owner_name?: string; // ← 追加：APIでJOINして返せるならここに名前
     title: string;
     description: string | null;
     difficulty?: number;
-    due_date: string | null;
-    status: 'open' | 'in_progress' | 'done';
+    due_date: string | null;      // APIは YYYY-MM-DD を推奨（ISOにしない）
+    status: TaskStatus;
     created_at: string;
     reward?: number;
     contractor: string | null;
 };
 
-/** /api/me の想定レスポンス */
 type Me = {
     id: string;
     email: string;
 };
 
-/** クッキー取得（CSRF等） */
+// ------------------------------
+// ユーティリティ
+// ------------------------------
+
+/** Cookie から値を取得（未設定は undefined） */
 function readCookie(name: string) {
     return document.cookie
         .split('; ')
@@ -32,8 +40,8 @@ function readCookie(name: string) {
         ?.split('=')[1];
 }
 
-/** ステータス表示ラベル */
-function labelOf(s: Task['status']): string {
+/** ステータス→表示ラベル */
+function labelOf(s: TaskStatus): string {
     switch (s) {
         case 'open':        return '募集中';
         case 'in_progress': return '対応中';
@@ -42,8 +50,8 @@ function labelOf(s: Task['status']): string {
     }
 }
 
-/** ステータスごとのBadge色 */
-function badgeClass(s: Task['status']): string {
+/** ステータス→バッジ用クラス */
+function badgeClass(s: TaskStatus): string {
     switch (s) {
         case 'open':
             return 'text-emerald-800 bg-emerald-50 ring-1 ring-emerald-200 dark:text-emerald-200 dark:bg-emerald-900/30 dark:ring-emerald-900';
@@ -54,12 +62,50 @@ function badgeClass(s: Task['status']): string {
     }
 }
 
-/** 小さめのPill */
+/** ピル風の小バッジ */
 function pillClass(): string {
     return 'rounded-full px-2 py-0.5 text-xs ring-1 ring-black/10 bg-white text-gray-700 dark:ring-white/10 dark:bg-white/5 dark:text-gray-200';
 }
 
-/** シマー背景（装飾用） */
+/** fetch → JSON の共通化（JSON失敗にも強い） */
+async function safeJson<T = unknown>(res: Response): Promise<T | {}> {
+    try {
+        return (await res.json()) as T;
+    } catch {
+        return {};
+    }
+}
+
+/** JSON API ヘルパー（ok/errを呼び出し側でハンドリング） */
+async function fetchJson<T = unknown>(input: RequestInfo, init?: RequestInit) {
+    const res = await fetch(input, init);
+    const data = await safeJson<T>(res);
+    return { res, data };
+}
+
+/** IDが来た時の短縮表示（8文字） */
+function shortId(id?: string | null): string {
+    if (!id) return '-';
+    return id.slice(0, 8);
+}
+
+/** 日付のみ（YYYY-MM-DD）に正規化 */
+function fmtDateOnly(input?: string | null): string {
+    if (!input) return '-';
+    // すでに YYYY-MM-DD ならそのまま
+    if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return input;
+
+    const d = new Date(input);
+    if (isNaN(d.getTime())) return '-';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const da = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${da}`;
+}
+
+// ------------------------------
+// スケルトン & 装飾
+// ------------------------------
 function ShimmerBar() {
     return (
         <div className="h-1 w-full overflow-hidden rounded-full bg-gradient-to-r from-indigo-100 via-blue-100 to-indigo-100 dark:from-indigo-900/40 dark:via-blue-900/40 dark:to-indigo-900/40">
@@ -74,7 +120,6 @@ function ShimmerBar() {
     );
 }
 
-/** スケルトン：行タイトル */
 function SkeletonHeaderRow() {
     return (
         <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -87,7 +132,6 @@ function SkeletonHeaderRow() {
     );
 }
 
-/** スケルトン：タスクカード */
 function SkeletonCard() {
     return (
         <li className="relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900/60">
@@ -116,7 +160,6 @@ function SkeletonCard() {
     );
 }
 
-/** スケルトン：サイドバー */
 function SkeletonSidebar() {
     return (
         <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
@@ -132,62 +175,76 @@ function SkeletonSidebar() {
     );
 }
 
+// ------------------------------
+// 本体
+// ------------------------------
 export default function BbsPage() {
     const router = useRouter();
 
     const [me, setMe] = useState<Me | null>(null);
     const [tasks, setTasks] = useState<Task[]>([]);
     const [open, setOpen] = useState(false);
-    const [loading, setLoading] = useState(true); // ← 追加：ロード状態
+    const [loading, setLoading] = useState(true);
+    const [busy, setBusy] = useState(false); // 投稿ボタン連打防止
 
-    // モーダルのフォーム
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
-    const [dueDate, setDueDate] = useState('');
-    const [difficulty, setDifficulty] = useState<number>(1); // 1–5
-    const [reward, setReward] = useState<number | ''>('');   // >=0
+    const [dueDate, setDueDate] = useState(''); // YYYY-MM-DD（ISOにしない）
+    const [difficulty, setDifficulty] = useState<number>(1);
+    const [reward, setReward] = useState<number | ''>('');
 
-    // 表示ルール：未受注かつ募集中
+    // 未受注 & 募集中のみ表示
     const visibleTasks = useMemo(
         () => tasks.filter((t) => t.status === 'open' && t.contractor === null),
         [tasks]
     );
 
-    // 認証 & 初期ロード
+    // 進行中リクエスト中断用（アンマウント時の警告防止）
+    const abortRef = useRef<AbortController | null>(null);
+    useEffect(() => {
+        return () => abortRef.current?.abort();
+    }, []);
+
     useEffect(() => {
         async function bootstrap() {
+            setLoading(true);
             try {
-                const res = await fetch('/api/me', { credentials: 'include' });
-                if (!res.ok) {
-                    router.push('/');
+                abortRef.current?.abort();
+                const controller = new AbortController();
+                abortRef.current = controller;
+
+                // 認証情報
+                const meRes = await fetch('/api/me', { credentials: 'include', signal: controller.signal });
+                if (!meRes.ok) {
+                    router.replace('/');
                     return;
                 }
-                const data: Me = await res.json();
+                const data: Me = await meRes.json();
                 if (!data?.id) {
                     console.warn('/api/me に id がありません。受注処理に必要です。');
                 }
                 setMe(data);
 
-                try {
-                    const tRes = await fetch('/api/tasks/bbs', { credentials: 'include' });
-                    if (tRes.ok) {
-                        const json = await tRes.json();
-                        setTasks(json.tasks ?? []);
-                    } else {
-                        setTasks([]);
-                    }
-                } catch {
+                // 掲示板タスク
+                const { res: tRes, data: tData } = await fetchJson<{ tasks: Task[] }>('/api/tasks/bbs', {
+                    credentials: 'include',
+                    signal: controller.signal as any
+                });
+                setTasks(tRes.ok ? (tData as any)?.tasks ?? [] : []);
+            } catch (e: any) {
+                if (e?.name !== 'AbortError') {
+                    console.error(e);
                     setTasks([]);
                 }
             } finally {
-                setLoading(false); // 成否に関わらずロード終了
+                setLoading(false);
             }
         }
         bootstrap();
     }, [router]);
 
-    /** 依頼の追加（モーダルから作成） */
-    async function addTaskFromModal() {
+    /** 新規依頼を作成（モーダルから） */
+    const addTaskFromModal = useCallback(async () => {
         const trimmedTitle = title.trim();
         if (!trimmedTitle) {
             alert('タイトルは必須です');
@@ -197,8 +254,15 @@ export default function BbsPage() {
             alert('ユーザー情報取得に失敗しました。再度ログインしてください。');
             return;
         }
+        if (busy) return; // 多重投稿防止
 
         const csrf = readCookie('csrf_token') ?? '';
+        if (!csrf) {
+            alert('CSRFトークンが見つかりません。ログインし直してください。');
+            return;
+        }
+
+        // APIは YYYY-MM-DD を受ける前提。ISOに変換しない（TZずれ回避）
         const payload: Record<string, unknown> = {
             owner_id: me.id,
             title: trimmedTitle,
@@ -206,24 +270,23 @@ export default function BbsPage() {
             due_date: dueDate || null,
             status: 'open',
             difficulty: Number.isFinite(difficulty) ? difficulty : 1,
-            ...(reward === '' ? {} : { reward: Number(reward) }),
+            ...(reward === '' ? {} : { reward: Number(reward) })
         };
 
         try {
-            const res = await fetch('/api/tasks/bbs', {
+            setBusy(true);
+            const { res, data } = await fetchJson<{ task: Task; error?: string }>('/api/tasks/bbs', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-CSRF-Token': csrf,
+                    'X-CSRF-Token': csrf
                 },
                 credentials: 'include',
-                body: JSON.stringify(payload),
+                body: JSON.stringify(payload)
             });
 
-            const data = await res.json();
-            if (res.ok) {
-                setTasks((prev) => [data.task as Task, ...prev]);
-                // リセット
+            if (res.ok && (data as any)?.task) {
+                setTasks((prev) => [(data as any).task as Task, ...prev]);
                 setTitle('');
                 setDescription('');
                 setDueDate('');
@@ -231,58 +294,83 @@ export default function BbsPage() {
                 setReward('');
                 setOpen(false);
             } else {
-                alert(data?.error ?? '作成に失敗しました');
+                alert((data as any)?.error ?? '作成に失敗しました');
             }
-        } catch {
-            alert('通信エラーが発生しました');
+        } catch (e: any) {
+            if (e?.name !== 'AbortError') {
+                alert('通信エラーが発生しました');
+            }
+        } finally {
+            setBusy(false);
         }
-    }
+    }, [title, description, dueDate, difficulty, reward, me, busy]);
 
-    /** 受注（→ in_progress & contractor を自分に） */
-    async function acceptTask(id: string) {
+    /** タスクを受注（楽観的更新＋失敗時ロールバック） */
+    const acceptTask = useCallback(async (id: string) => {
         if (!me?.id) {
             alert('ユーザー情報取得に失敗しました。再度ログインしてください。');
             return;
         }
+
         // 楽観的更新
-        setTasks((prev) =>
-            prev.map((t) =>
-                t.id === id ? { ...t, status: 'in_progress', contractor: me.id } : t
-            )
+        const prev = tasks;
+        setTasks((cur) =>
+            cur.map((t) => (t.id === id ? { ...t, status: 'in_progress', contractor: me.id } : t))
         );
 
-        // ▼実API例（ロールバック処理は省略コメントのまま）
-        // try {
-        //     const csrf = readCookie('csrf_token') ?? '';
-        //     const res = await fetch(`/api/tasks/${id}/accept`, {
-        //         method: 'POST',
-        //         headers: { 'X-CSRF-Token': csrf },
-        //         credentials: 'include',
-        //     });
-        //     if (!res.ok) { /* ロールバック処理 */ }
-        // } catch { /* ロールバック処理 */ }
-    }
+        // ▼実API例：失敗時はロールバック
+        try {
+            const csrf = readCookie('csrf_token') ?? '';
+            if (!csrf) throw new Error('CSRFトークンが見つかりません');
+
+            const res = await fetch(`/api/tasks/${id}/accept`, {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': csrf },
+                credentials: 'include'
+            });
+            if (!res.ok) {
+                setTasks(prev); // ロールバック
+                const msg = await res.text().catch(() => '');
+                alert(msg || '受注に失敗しました');
+            }
+        } catch (e: any) {
+            if (e?.name !== 'AbortError') {
+                setTasks(prev); // ロールバック
+                alert('通信エラーが発生しました');
+            }
+        }
+    }, [me, tasks]);
 
     /** ログアウト */
-    async function logout() {
+    const logout = useCallback(async () => {
         const csrf = readCookie('csrf_token') ?? '';
-        await fetch('/api/logout', {
-            method: 'POST',
-            headers: { 'X-CSRF-Token': csrf },
-            credentials: 'include',
-        });
-        router.push('/');
-    }
+        try {
+            if (!csrf) throw new Error('CSRFトークンが見つかりません');
+            await fetch('/api/logout', {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': csrf },
+                credentials: 'include'
+            });
+        } finally {
+            router.push('/');
+        }
+    }, [router]);
 
-    // モーダルの初回フォーカス
+    // モーダルの初期フォーカス & Esc クローズ
     const firstInputRef = useRef<HTMLInputElement | null>(null);
     useEffect(() => {
         if (open) setTimeout(() => firstInputRef.current?.focus(), 0);
     }, [open]);
+    useEffect(() => {
+        function onKey(e: KeyboardEvent) {
+            if (e.key === 'Escape' && open) setOpen(false);
+        }
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [open]);
 
     return (
         <div className="min-h-screen bg-gradient-to-b from-white to-gray-50 text-gray-900 dark:from-gray-950 dark:to-gray-900 dark:text-gray-100">
-            {/* ===== ヘッダー ===== */}
             <header className="sticky top-0 z-30 border-b border-gray-200/70 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/50 dark:border-gray-800 dark:bg-gray-900/60">
                 <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
                     <div className="flex items-center gap-2">
@@ -304,18 +392,15 @@ export default function BbsPage() {
                         </button>
                     </div>
                 </div>
-                {/* 上部シマー進捗（ロード中のみ） */}
                 {loading && <div className="px-4"><div className="mx-auto max-w-6xl py-1"><ShimmerBar /></div></div>}
             </header>
 
-            {/* ===== コンテンツ（サイドバー + メイン） ===== */}
             <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 p-4 sm:grid-cols-[220px_minmax(0,1fr)]">
-                {/* ===== サイドバー ===== */}
                 {loading ? (
                     <SkeletonSidebar />
                 ) : (
                     <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
-                        <nav className="space-y-1">
+                        <nav className="space-y-1" aria-label="サイドバー">
                             <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
                                 メニュー
                             </div>
@@ -339,13 +424,7 @@ export default function BbsPage() {
                     </aside>
                 )}
 
-                {/* ===== メインコンテンツ ===== */}
-                <main
-                    className="space-y-4"
-                    aria-busy={loading}
-                    aria-live="polite"
-                >
-                    {/* タイトル行 */}
+                <main className="space-y-4" aria-busy={loading} aria-live="polite">
                     {loading ? <SkeletonHeaderRow /> : (
                         <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                             <div>
@@ -363,7 +442,6 @@ export default function BbsPage() {
                         </div>
                     )}
 
-                    {/* 募集中一覧 */}
                     <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900/60">
                         <div className="mb-3 flex items-center justify-between">
                             <h2 className="text-lg font-semibold tracking-tight">募集中のタスク</h2>
@@ -389,7 +467,6 @@ export default function BbsPage() {
                                         key={t.id}
                                         className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition hover:shadow-md dark:border-gray-800 dark:bg-gray-900/60"
                                     >
-                                        {/* Hoverアクセント */}
                                         <div className="pointer-events-none absolute inset-0 opacity-0 transition group-hover:opacity-100">
                                             <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/0 via-indigo-500/5 to-indigo-500/0" />
                                         </div>
@@ -411,7 +488,7 @@ export default function BbsPage() {
 
                                                 <div className="flex flex-wrap items-center gap-2 text-xs">
                                                     <span className={pillClass()}>
-                                                        依頼者ID: <strong className="font-semibold">{t.owner_id}</strong>
+                                                        依頼者: <strong className="font-semibold">{t.owner_name ?? shortId(t.owner_id)}</strong>
                                                     </span>
                                                     {typeof t.difficulty === 'number' && (
                                                         <span className={pillClass()}>
@@ -425,7 +502,7 @@ export default function BbsPage() {
                                                     )}
                                                     {t.due_date && (
                                                         <span className={pillClass()}>
-                                                            期日: {t.due_date}
+                                                            期日: {fmtDateOnly(t.due_date)}
                                                         </span>
                                                     )}
                                                 </div>
@@ -450,7 +527,6 @@ export default function BbsPage() {
                 </main>
             </div>
 
-            {/* ===== モーダル（依頼作成） ===== */}
             {open && (
                 <Modal onClose={() => setOpen(false)} title="新規依頼を作成">
                     <div className="space-y-4">
@@ -462,6 +538,7 @@ export default function BbsPage() {
                                 value={title}
                                 onChange={(e) => setTitle(e.target.value)}
                                 placeholder="例: 仕様書のレビュー"
+                                aria-required="true"
                             />
                         </div>
 
@@ -532,10 +609,10 @@ export default function BbsPage() {
                             <button
                                 onClick={addTaskFromModal}
                                 className="rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:translate-y-px disabled:opacity-60"
-                                disabled={!me?.id}
-                                title={!me?.id ? 'ユーザー情報取得中' : '依頼を投稿'}
+                                disabled={!me?.id || busy}
+                                title={!me?.id ? 'ユーザー情報取得中' : busy ? '送信中…' : '依頼を投稿'}
                             >
-                                依頼を投稿
+                                {busy ? '送信中…' : '依頼を投稿'}
                             </button>
                         </div>
                     </div>
@@ -545,7 +622,6 @@ export default function BbsPage() {
     );
 }
 
-/** シンプルなモーダル（背景ブラー + カード） */
 function Modal(props: { title: string; onClose: () => void; children: React.ReactNode }) {
     return (
         <div
