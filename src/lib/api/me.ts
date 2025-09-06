@@ -25,7 +25,7 @@ export async function handleGetMe() {
         const payload = await verifyAccess(token);
 
         // 認証成功 → email を返す
-        return NextResponse.json({ ok: true, email: payload.email });
+        return NextResponse.json({ ok: true, id: payload.sub, email: payload.email });
     } catch {
         // 検証失敗 → エラーを返す
         return NextResponse.json(

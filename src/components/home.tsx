@@ -34,13 +34,10 @@ function fmtDate(input?: string | null): string {
     if (!input) {
         return '-';
     }
-
     const d = new Date(input);
-
     if (isNaN(d.getTime())) {
         return '-';
     }
-
     return d.toLocaleString();
 }
 
@@ -49,13 +46,10 @@ function fmtDateOnly(input?: string | null): string {
     if (!input) {
         return '-';
     }
-
     const d = new Date(input);
-
     if (isNaN(d.getTime())) {
         return '-';
     }
-
     return d.toLocaleDateString();
 }
 
@@ -132,7 +126,7 @@ function StatusCell(props: {
         return (
             <button
                 type="button"
-                className="px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-left w-full"
+                className="w-full rounded px-2 py-1 text-left transition hover:bg-gray-100 dark:hover:bg-gray-800"
                 onClick={() => setEditing(true)}
                 onKeyDown={handleKeyDown}
                 aria-label={`ステータスを編集: 現在は ${STATUS_LABEL[value]}`}
@@ -144,7 +138,7 @@ function StatusCell(props: {
 
     return (
         <select
-            className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1"
+            className="w-full rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
             autoFocus
             defaultValue={value}
             onChange={handleChange}
@@ -161,7 +155,93 @@ function StatusCell(props: {
         </select>
     );
 }
-/** ===== ここまで追加分 ===== */
+/** ===== ここまで既存 ===== */
+
+/** ===== スケルトン & シマー ===== */
+
+/** 上部に表示するシマー進捗バー（ロード中のみ） */
+function ShimmerBar() {
+    return (
+        <div className="h-1 w-full overflow-hidden rounded-full bg-gradient-to-r from-indigo-100 via-blue-100 to-indigo-100 dark:from-indigo-900/40 dark:via-blue-900/40 dark:to-indigo-900/40">
+            <div className="h-full w-1/3 animate-[shimmer_1.8s_infinite] rounded-full bg-gradient-to-r from-indigo-400/50 via-blue-400/60 to-indigo-400/50 dark:from-indigo-500/50 dark:via-blue-500/60 dark:to-indigo-500/50" />
+            <style jsx>{`
+                @keyframes shimmer {
+                    0% { transform: translateX(-100%); }
+                    100% { transform: translateX(300%); }
+                }
+            `}</style>
+        </div>
+    );
+}
+
+/** サイドバーのスケルトン */
+function SkeletonSidebar() {
+    return (
+        <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
+            <div className="space-y-2">
+                <div className="px-2 pb-2">
+                    <div className="h-3 w-16 animate-pulse rounded bg-gray-200/80 dark:bg-gray-700/60" />
+                </div>
+                <div className="h-8 w-full animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
+                <div className="h-8 w-full animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
+                <div className="my-3 h-px w-full bg-dashed bg-[length:8px_1px] bg-left bg-repeat-x [background-image:linear-gradient(to_right,rgba(0,0,0,.15)_50%,transparent_0)] dark:[background-image:linear-gradient(to_right,rgba(255,255,255,.15)_50%,transparent_0)]" />
+            </div>
+        </aside>
+    );
+}
+
+/** 入力フォームのスケルトン */
+function SkeletonForm() {
+    return (
+        <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+            <div className="mb-3 h-5 w-56 animate-pulse rounded bg-gray-200/80 dark:bg-gray-700/60" />
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
+                <div className="sm:col-span-3 h-10 animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
+                <div className="sm:col-span-5 h-10 animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
+                <div className="sm:col-span-3 h-10 animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
+                <div className="sm:col-span-3 h-10 animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
+            </div>
+            <div className="mt-3 h-10 w-28 animate-pulse rounded-lg bg-gradient-to-r from-indigo-300 to-violet-300 dark:from-indigo-700 dark:to-violet-700" />
+        </section>
+    );
+}
+
+/** タスクテーブルのスケルトン */
+function SkeletonTable() {
+    return (
+        <section className="rounded-2xl border border-gray-200 bg-white p-0 dark:border-gray-800 dark:bg-gray-900">
+            <div className="border-b border-gray-200 p-4 dark:border-gray-800">
+                <div className="h-4 w-24 animate-pulse rounded bg-gray-200/80 dark:bg-gray-700/60" />
+            </div>
+            <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-sm">
+                    <thead>
+                        <tr className="bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                            {[...Array(5)].map((_, i) => (
+                                <th key={i} className="px-4 py-2 text-left">
+                                    <div className="h-3 w-16 animate-pulse rounded bg-gray-200/80 dark:bg-gray-700/60" />
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {[...Array(5)].map((_, row) => (
+                            <tr key={row} className={row % 2 === 0 ? 'bg-white dark:bg-gray-900' : 'bg-gray-50 dark:bg-gray-950'}>
+                                {[...Array(5)].map((__, col) => (
+                                    <td key={col} className="px-4 py-3">
+                                        <div className="h-4 w-40 animate-pulse rounded bg-gray-100 dark:bg-gray-800" />
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    );
+}
+
+/** ===== ここまでスケルトン ===== */
 
 export default function HomePage() {
     const [email, setEmail] = useState<string | null>(null);
@@ -179,24 +259,26 @@ export default function HomePage() {
 
     useEffect(() => {
         async function bootstrap() {
-            // 1) 認証確認
-            const meRes = await fetch('/api/me', { credentials: 'include' });
-            if (!meRes.ok) {
-                router.push('/');
-                return;
+            try {
+                // 1) 認証確認
+                const meRes = await fetch('/api/me', { credentials: 'include' });
+                if (!meRes.ok) {
+                    router.push('/');
+                    return;
+                }
+                const me = await meRes.json();
+                setEmail(me.email);
+
+                // 2) ユーザー取得（配列を返す）
+                const usersFetched = await fetchUsers();
+
+                // 3) タスク一覧取得
+                if (usersFetched.length > 0) {
+                    await fetchTasks(usersFetched[0].id);
+                }
+            } finally {
+                setLoading(false);
             }
-            const me = await meRes.json();
-            setEmail(me.email);
-
-            // 2) ユーザー取得（配列を返す）
-            const usersFetched = await fetchUsers();
-
-            // 3) タスク一覧取得
-            if (usersFetched.length > 0) {
-                await fetchTasks(usersFetched[0].id);
-            }
-
-            setLoading(false);
         }
 
         async function fetchTasks(contractor?: string) {
@@ -221,7 +303,7 @@ export default function HomePage() {
             }
             const data = await res.json();
             setUsers(data.users ?? []);
-            return data.users ?? [];     // ← 呼び出し元で即使える
+            return data.users ?? [];
         }
 
         bootstrap();
@@ -251,17 +333,17 @@ export default function HomePage() {
 
         const description = newDescription.trim();
         if (description) {
-            payload.description = description;
+            (payload as any).description = description;
         }
 
         if (newDueLocal) {
             const d = new Date(newDueLocal);
             if (!isNaN(d.getTime())) {
-                payload.due_date = d.toISOString();
+                (payload as any).due_date = d.toISOString();
             }
         }
 
-        payload.contractor = users[0].id;
+        (payload as any).contractor = users[0]?.id;
 
         const res = await fetch('/api/tasks', {
             method: 'POST',
@@ -297,14 +379,6 @@ export default function HomePage() {
         router.push('/');
     }
 
-    if (loading) {
-        return (
-            <main className="mx-auto mt-10 max-w-md p-4">
-                <p>読み込み中...</p>
-            </main>
-        );
-    }
-
     return (
         <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
             {/* ===== ヘッダー ===== */}
@@ -330,143 +404,169 @@ export default function HomePage() {
                     {/* ログアウト */}
                     <div className="flex items-center gap-3">
                         <span className="hidden text-xs text-gray-500 dark:text-gray-400 sm:inline">
-                            {email ?? 'Guest'}
+                            {loading ? 'Loading…' : (email ?? 'Guest')}
                         </span>
-                        <button onClick={logout} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800">
+                        <button
+                            onClick={logout}
+                            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800"
+                            disabled={loading}
+                        >
                             ログアウト
                         </button>
                     </div>
                 </div>
+                {loading && <div className="px-4"><div className="mx-auto max-w-6xl py-1"><ShimmerBar /></div></div>}
             </header>
 
             {/* ===== シェル（サイドバー + メイン） ===== */}
             <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 p-4 sm:grid-cols-[220px_minmax(0,1fr)]">
                 {/* ===== サイドバー ===== */}
-                <aside className="sticky top-16 hidden h[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
-                    <nav className="space-y-1">
-                        <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                            メニュー
-                        </div>
-                        <a href="/home"
-                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
-                            <span>📋</span> <span>ホーム</span>
-                        </a>
-                        <a href="/bbs"
-                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
-                            <span>📋</span> <span>タスク掲示板</span>
-                        </a>
-                        {/* <a href="/terms"
-                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
-                            <span>📄</span> <span>利用規約</span>
-                        </a> */}
-                        {/* <a href="/privacy"
-                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
-                            <span>🔒</span> <span>プライバシー</span>
-                        </a> */}
-
-                        <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
-                    </nav>
-                </aside>
+                {loading ? (
+                    <SkeletonSidebar />
+                ) : (
+                    <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
+                        <nav className="space-y-1">
+                            <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                                メニュー
+                            </div>
+                            <a
+                                href="/home"
+                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                            >
+                                <span>📋</span> <span>ホーム</span>
+                            </a>
+                            <a
+                                href="/bbs"
+                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                            >
+                                <span>📋</span> <span>タスク掲示板</span>
+                            </a>
+                            <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
+                        </nav>
+                    </aside>
+                )}
 
                 {/* ===== メインコンテンツ ===== */}
-                <main className="space-y-4">
-                    {/* 入力フォーム */}
-                    <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-                        <h1 className="text-lg font-semibold mb-2">ようこそ、{email} さん</h1>
+                <main className="space-y-4" aria-busy={loading} aria-live="polite">
+                    {loading ? (
+                        <>
+                            <SkeletonForm />
+                            <SkeletonTable />
+                        </>
+                    ) : (
+                        <>
+                            {/* 入力フォーム */}
+                            <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+                                <h1 className="mb-2 text-lg font-semibold">ようこそ、{email} さん</h1>
 
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
-                            {/* 1行目 */}
-                            <input className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
-                                placeholder="タイトル"
-                                value={newTitle}
-                                onChange={(e) => setNewTitle(e.target.value)}/>
-                            <input className="sm:col-span-5 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
-                                placeholder="詳細（任意）"
-                                value={newDescription}
-                                onChange={(e) => setNewDescription(e.target.value)}/>
-                            <input type="date"
-                                className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950 dark:[&::-webkit-calendar-picker-indicator]:invert"
-                                value={newDueLocal}
-                                onChange={(e) => setNewDueLocal(e.target.value)}/>
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
+                                    {/* 1行目 */}
+                                    <input
+                                        className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
+                                        placeholder="タイトル"
+                                        value={newTitle}
+                                        onChange={(e) => setNewTitle(e.target.value)}
+                                    />
+                                    <input
+                                        className="sm:col-span-5 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
+                                        placeholder="詳細（任意）"
+                                        value={newDescription}
+                                        onChange={(e) => setNewDescription(e.target.value)}
+                                    />
+                                    <input
+                                        type="date"
+                                        className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950 dark:[&::-webkit-calendar-picker-indicator]:invert"
+                                        value={newDueLocal}
+                                        onChange={(e) => setNewDueLocal(e.target.value)}
+                                    />
 
-                            {/* 2行目 */}
-                            <select className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none focus:ring-2 ring-indigo-500/20 dark:border-gray-800 dark:bg-gray-950"
-                                value={newStatus}
-                                onChange={(e) => setNewStatus(e.target.value as 'open' | 'in_progress' | 'done')}>
-                                <option value="open">未完了</option>
-                                <option value="in_progress">進行中</option>
-                                <option value="done">完了</option>
-                            </select>
-                        </div>
+                                    {/* 2行目 */}
+                                    <select
+                                        className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
+                                        value={newStatus}
+                                        onChange={(e) => setNewStatus(e.target.value as 'open' | 'in_progress' | 'done')}
+                                    >
+                                        <option value="open">未完了</option>
+                                        <option value="in_progress">進行中</option>
+                                        <option value="done">完了</option>
+                                    </select>
+                                </div>
 
-                        <div className="mt-3">
-                            <button onClick={addTask}
-                                className="rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99]">
-                                追加する
-                            </button>
-                        </div>
+                                <div className="mt-3">
+                                    <button
+                                        onClick={addTask}
+                                        className="rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99]"
+                                    >
+                                        追加する
+                                    </button>
+                                </div>
 
-                        {msg && (
-                            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{msg}</p>
-                        )}
-                    </section>
+                                {msg && (
+                                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{msg}</p>
+                                )}
+                            </section>
 
-                    {/* タスク一覧 */}
-                    <section className="rounded-2xl border border-gray-200 bg-white p-0 dark:border-gray-800 dark:bg-gray-900">
-                        <div className="border-b border-gray-200 p-4 dark:border-gray-800">
-                            <h2 className="text-sm font-semibold">タスク一覧</h2>
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full border-collapse text-sm">
-                                <thead>
-                                    <tr className="bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-300">
-                                        <th className="px-4 py-2 text-left">タイトル</th>
-                                        <th className="px-4 py-2 text-left">詳細</th>
-                                        <th className="px-4 py-2 text-left">期限</th>
-                                        <th className="px-4 py-2 text-left">ステータス</th>
-                                        <th className="px-4 py-2 text-left">作成日時</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {tasks.length === 0 && (
-                                        <tr>
-                                            <td colSpan={5} className="px-4 py-6 text-center text-gray-500 dark:text-gray-400">
-                                                タスクはまだありません。
-                                            </td>
-                                        </tr>
-                                    )}
-                                    {tasks.map((t, idx) => (
-                                        <tr key={t.id} className={idx % 2 === 0 ? 'bg-white dark:bg-gray-900' : 'bg-gray-50 dark:bg-gray-950'}>
-                                            <td className="px-4 py-3">{t.title}</td>
-                                            <td className="px-4 py-3">{t.description ?? '-'}</td>
-                                            <td className="px-4 py-3">{fmtDateOnly(t.due_date)}</td>
-                                            <td className="px-4 py-3">
-                                                <StatusCell
-                                                    taskId={t.id}
-                                                    value={t.status}
-                                                    onLocalChange={(next) => {
-                                                        setTasks((prev) =>
-                                                            prev.map((x) =>
-                                                                x.id === t.id ? { ...x, status: next } : x
-                                                            )
-                                                        );
-                                                    }}
-                                                    onRevert={(prevStatus) => {
-                                                        setTasks((prev) =>
-                                                            prev.map((x) =>
-                                                                x.id === t.id ? { ...x, status: prevStatus } : x
-                                                            )
-                                                        );
-                                                    }}
-                                                />
-                                            </td>
-                                            <td className="px-4 py-3">{fmtDate(t.created_at)}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
+                            {/* タスク一覧 */}
+                            <section className="rounded-2xl border border-gray-200 bg-white p-0 dark:border-gray-800 dark:bg-gray-900">
+                                <div className="border-b border-gray-200 p-4 dark:border-gray-800">
+                                    <h2 className="text-sm font-semibold">タスク一覧</h2>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full border-collapse text-sm">
+                                        <thead>
+                                            <tr className="bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                                                <th className="px-4 py-2 text-left">タイトル</th>
+                                                <th className="px-4 py-2 text-left">詳細</th>
+                                                <th className="px-4 py-2 text-left">期限</th>
+                                                <th className="px-4 py-2 text-left">ステータス</th>
+                                                <th className="px-4 py-2 text-left">作成日時</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {tasks.length === 0 && (
+                                                <tr>
+                                                    <td colSpan={5} className="px-4 py-6 text-center text-gray-500 dark:text-gray-400">
+                                                        タスクはまだありません。
+                                                    </td>
+                                                </tr>
+                                            )}
+                                            {tasks.map((t, idx) => (
+                                                <tr
+                                                    key={t.id}
+                                                    className={idx % 2 === 0 ? 'bg-white dark:bg-gray-900' : 'bg-gray-50 dark:bg-gray-950'}
+                                                >
+                                                    <td className="px-4 py-3">{t.title}</td>
+                                                    <td className="px-4 py-3">{t.description ?? '-'}</td>
+                                                    <td className="px-4 py-3">{fmtDateOnly(t.due_date)}</td>
+                                                    <td className="px-4 py-3">
+                                                        <StatusCell
+                                                            taskId={t.id}
+                                                            value={t.status}
+                                                            onLocalChange={(next) => {
+                                                                setTasks((prev) =>
+                                                                    prev.map((x) =>
+                                                                        x.id === t.id ? { ...x, status: next } : x
+                                                                    )
+                                                                );
+                                                            }}
+                                                            onRevert={(prevStatus) => {
+                                                                setTasks((prev) =>
+                                                                    prev.map((x) =>
+                                                                        x.id === t.id ? { ...x, status: prevStatus } : x
+                                                                    )
+                                                                );
+                                                            }}
+                                                        />
+                                                    </td>
+                                                    <td className="px-4 py-3">{fmtDate(t.created_at)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
+                        </>
+                    )}
                 </main>
             </div>
         </div>

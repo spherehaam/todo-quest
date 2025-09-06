@@ -1,21 +1,30 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
+/** タスクの型定義（DBスキーマ準拠） */
 type Task = {
     id: string;
+    owner_id: string;
     title: string;
-    description: string;
+    description: string | null;
+    difficulty?: number;
+    due_date: string | null;
+    status: 'open' | 'in_progress' | 'done';
+    created_at: string;
     reward?: number;
-    dueDate?: string;
-    status: 'open' | 'assigned' | 'done';
-    requester: string;
-    assignee?: string | null;
-    createdAt: string;
+    contractor: string | null;
 };
 
-/** クッキーから値を取得 */
+/** /api/me の想定レスポンス */
+type Me = {
+    id: string;
+    email: string;
+};
+
+/** クッキー取得（CSRF等） */
 function readCookie(name: string) {
     return document.cookie
         .split('; ')
@@ -23,80 +32,235 @@ function readCookie(name: string) {
         ?.split('=')[1];
 }
 
-export default function BbsPage() {
-    const [tasks, setTasks] = useState<Task[]>([]);
-    const [filter, setFilter] = useState<'all' | 'open' | 'assigned' | 'done'>('all');
-    const [email, setEmail] = useState<string | null>(null);
+/** ステータス表示ラベル */
+function labelOf(s: Task['status']): string {
+    switch (s) {
+        case 'open':        return '募集中';
+        case 'in_progress': return '対応中';
+        case 'done':        return '完了';
+        default:            return s;
+    }
+}
 
-    // 依頼フォームの状態
-    const [title, setTitle] = useState('');
-    const [description, setDescription] = useState('');
-    const [reward, setReward] = useState<number | ''>('');
-    const [dueDate, setDueDate] = useState('');
-    const [requester, setRequester] = useState('');
+/** ステータスごとのBadge色 */
+function badgeClass(s: Task['status']): string {
+    switch (s) {
+        case 'open':
+            return 'text-emerald-800 bg-emerald-50 ring-1 ring-emerald-200 dark:text-emerald-200 dark:bg-emerald-900/30 dark:ring-emerald-900';
+        case 'in_progress':
+            return 'text-amber-800 bg-amber-50 ring-1 ring-amber-200 dark:text-amber-200 dark:bg-amber-900/30 dark:ring-amber-900';
+        case 'done':
+            return 'text-slate-700 bg-slate-50 ring-1 ring-slate-200 dark:text-slate-200 dark:bg-slate-800/40 dark:ring-slate-800';
+    }
+}
+
+/** 小さめのPill */
+function pillClass(): string {
+    return 'rounded-full px-2 py-0.5 text-xs ring-1 ring-black/10 bg-white text-gray-700 dark:ring-white/10 dark:bg-white/5 dark:text-gray-200';
+}
+
+/** シマー背景（装飾用） */
+function ShimmerBar() {
+    return (
+        <div className="h-1 w-full overflow-hidden rounded-full bg-gradient-to-r from-indigo-100 via-blue-100 to-indigo-100 dark:from-indigo-900/40 dark:via-blue-900/40 dark:to-indigo-900/40">
+            <div className="h-full w-1/3 animate-[shimmer_1.8s_infinite] rounded-full bg-gradient-to-r from-indigo-400/50 via-blue-400/60 to-indigo-400/50 dark:from-indigo-500/50 dark:via-blue-500/60 dark:to-indigo-500/50" />
+            <style jsx>{`
+                @keyframes shimmer {
+                    0% { transform: translateX(-100%); }
+                    100% { transform: translateX(300%); }
+                }
+            `}</style>
+        </div>
+    );
+}
+
+/** スケルトン：行タイトル */
+function SkeletonHeaderRow() {
+    return (
+        <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div className="space-y-2">
+                <div className="h-6 w-44 animate-pulse rounded-md bg-gray-200/80 dark:bg-gray-700/60" />
+                <div className="h-3 w-64 animate-pulse rounded-md bg-gray-200/60 dark:bg-gray-700/50" />
+            </div>
+            <div className="h-9 w-28 animate-pulse rounded-xl bg-gradient-to-r from-indigo-300 to-blue-300 dark:from-indigo-700 dark:to-blue-700" />
+        </div>
+    );
+}
+
+/** スケルトン：タスクカード */
+function SkeletonCard() {
+    return (
+        <li className="relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900/60">
+            <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/0 via-indigo-500/5 to-indigo-500/0 opacity-0 transition group-hover:opacity-100" />
+            <div className="grid gap-3 sm:grid-cols-[1fr,auto] sm:items-start">
+                <div className="min-w-0 space-y-3">
+                    <div className="flex items-center gap-2">
+                        <div className="h-5 w-14 animate-pulse rounded-full bg-emerald-100 ring-1 ring-emerald-200 dark:bg-emerald-900/40 dark:ring-emerald-900/60" />
+                        <div className="h-4 w-48 animate-pulse rounded-md bg-gray-200/80 dark:bg-gray-700/60" />
+                    </div>
+                    <div className="space-y-2">
+                        <div className="h-3 w-full animate-pulse rounded-md bg-gray-200/60 dark:bg-gray-700/50" />
+                        <div className="h-3 w-3/5 animate-pulse rounded-md bg-gray-200/60 dark:bg-gray-700/50" />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <div className="h-5 w-28 animate-pulse rounded-full bg-white ring-1 ring-black/10 dark:bg-white/5 dark:ring-white/10" />
+                        <div className="h-5 w-20 animate-pulse rounded-full bg-white ring-1 ring-black/10 dark:bg-white/5 dark:ring-white/10" />
+                        <div className="h-5 w-20 animate-pulse rounded-full bg-white ring-1 ring-black/10 dark:bg-white/5 dark:ring-white/10" />
+                    </div>
+                </div>
+                <div className="flex min-w-[220px] items-start">
+                    <div className="h-9 w-24 animate-pulse rounded-xl bg-gradient-to-r from-indigo-300 to-blue-300 dark:from-indigo-700 dark:to-blue-700" />
+                </div>
+            </div>
+        </li>
+    );
+}
+
+/** スケルトン：サイドバー */
+function SkeletonSidebar() {
+    return (
+        <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
+            <div className="space-y-1">
+                <div className="px-2 pb-2">
+                    <div className="h-3 w-16 animate-pulse rounded bg-gray-200/80 dark:bg-gray-700/60" />
+                </div>
+                <div className="h-8 w-full animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
+                <div className="h-8 w-full animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
+                <div className="my-3 h-px w-full bg-dashed bg-[length:8px_1px] bg-left bg-repeat-x [background-image:linear-gradient(to_right,rgba(0,0,0,.15)_50%,transparent_0)] dark:[background-image:linear-gradient(to_right,rgba(255,255,255,.15)_50%,transparent_0)]" />
+            </div>
+        </aside>
+    );
+}
+
+export default function BbsPage() {
     const router = useRouter();
 
-    const filtered = useMemo(() => {
-        if (filter === 'all') return tasks;
-        return tasks.filter((t) => t.status === filter);
-    }, [tasks, filter]);
+    const [me, setMe] = useState<Me | null>(null);
+    const [tasks, setTasks] = useState<Task[]>([]);
+    const [open, setOpen] = useState(false);
+    const [loading, setLoading] = useState(true); // ← 追加：ロード状態
 
+    // モーダルのフォーム
+    const [title, setTitle] = useState('');
+    const [description, setDescription] = useState('');
+    const [dueDate, setDueDate] = useState('');
+    const [difficulty, setDifficulty] = useState<number>(1); // 1–5
+    const [reward, setReward] = useState<number | ''>('');   // >=0
+
+    // 表示ルール：未受注かつ募集中
+    const visibleTasks = useMemo(
+        () => tasks.filter((t) => t.status === 'open' && t.contractor === null),
+        [tasks]
+    );
+
+    // 認証 & 初期ロード
     useEffect(() => {
         async function bootstrap() {
-            // 1) 認証確認
-            const meRes = await fetch('/api/me', { credentials: 'include' });
-            if (!meRes.ok) {
-                router.push('/');
-                return;
-            }
-            const me = await meRes.json();
-            setEmail(me.email);
-        }
+            try {
+                const res = await fetch('/api/me', { credentials: 'include' });
+                if (!res.ok) {
+                    router.push('/');
+                    return;
+                }
+                const data: Me = await res.json();
+                if (!data?.id) {
+                    console.warn('/api/me に id がありません。受注処理に必要です。');
+                }
+                setMe(data);
 
+                try {
+                    const tRes = await fetch('/api/tasks/bbs', { credentials: 'include' });
+                    if (tRes.ok) {
+                        const json = await tRes.json();
+                        setTasks(json.tasks ?? []);
+                    } else {
+                        setTasks([]);
+                    }
+                } catch {
+                    setTasks([]);
+                }
+            } finally {
+                setLoading(false); // 成否に関わらずロード終了
+            }
+        }
         bootstrap();
     }, [router]);
 
-    function addTask() {
+    /** 依頼の追加（モーダルから作成） */
+    async function addTaskFromModal() {
         const trimmedTitle = title.trim();
-        const trimmedRequester = requester.trim();
-        if (!trimmedTitle || !trimmedRequester) {
-            alert('タイトルと依頼者は必須です');
+        if (!trimmedTitle) {
+            alert('タイトルは必須です');
             return;
         }
-        const newTask: Task = {
-            id: String(Date.now()),
+        if (!me?.id) {
+            alert('ユーザー情報取得に失敗しました。再度ログインしてください。');
+            return;
+        }
+
+        const csrf = readCookie('csrf_token') ?? '';
+        const payload: Record<string, unknown> = {
+            owner_id: me.id,
             title: trimmedTitle,
-            description: description.trim(),
-            reward: reward === '' ? undefined : Number(reward),
-            dueDate: dueDate || undefined,
+            description: description.trim() || null,
+            due_date: dueDate || null,
             status: 'open',
-            requester: trimmedRequester,
-            assignee: null,
-            createdAt: new Date().toISOString(),
+            difficulty: Number.isFinite(difficulty) ? difficulty : 1,
+            ...(reward === '' ? {} : { reward: Number(reward) }),
         };
-        setTasks((prev) => [newTask, ...prev]);
-        setTitle('');
-        setDescription('');
-        setReward('');
-        setDueDate('');
+
+        try {
+            const res = await fetch('/api/tasks/bbs', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrf,
+                },
+                credentials: 'include',
+                body: JSON.stringify(payload),
+            });
+
+            const data = await res.json();
+            if (res.ok) {
+                setTasks((prev) => [data.task as Task, ...prev]);
+                // リセット
+                setTitle('');
+                setDescription('');
+                setDueDate('');
+                setDifficulty(1);
+                setReward('');
+                setOpen(false);
+            } else {
+                alert(data?.error ?? '作成に失敗しました');
+            }
+        } catch {
+            alert('通信エラーが発生しました');
+        }
     }
 
-    function acceptTask(id: string, name: string) {
+    /** 受注（→ in_progress & contractor を自分に） */
+    async function acceptTask(id: string) {
+        if (!me?.id) {
+            alert('ユーザー情報取得に失敗しました。再度ログインしてください。');
+            return;
+        }
+        // 楽観的更新
         setTasks((prev) =>
             prev.map((t) =>
-                t.id === id ? { ...t, status: 'assigned', assignee: name || '匿名' } : t
+                t.id === id ? { ...t, status: 'in_progress', contractor: me.id } : t
             )
         );
-    }
 
-    function completeTask(id: string) {
-        setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status: 'done' } : t)));
-    }
-
-    function cancelAssign(id: string) {
-        setTasks((prev) =>
-            prev.map((t) => (t.id === id ? { ...t, status: 'open', assignee: null } : t))
-        );
+        // ▼実API例（ロールバック処理は省略コメントのまま）
+        // try {
+        //     const csrf = readCookie('csrf_token') ?? '';
+        //     const res = await fetch(`/api/tasks/${id}/accept`, {
+        //         method: 'POST',
+        //         headers: { 'X-CSRF-Token': csrf },
+        //         credentials: 'include',
+        //     });
+        //     if (!res.ok) { /* ロールバック処理 */ }
+        // } catch { /* ロールバック処理 */ }
     }
 
     /** ログアウト */
@@ -105,466 +269,309 @@ export default function BbsPage() {
         await fetch('/api/logout', {
             method: 'POST',
             headers: { 'X-CSRF-Token': csrf },
-            credentials: 'include'
+            credentials: 'include',
         });
         router.push('/');
     }
 
-    return (
+    // モーダルの初回フォーカス
+    const firstInputRef = useRef<HTMLInputElement | null>(null);
+    useEffect(() => {
+        if (open) setTimeout(() => firstInputRef.current?.focus(), 0);
+    }, [open]);
 
-        <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+    return (
+        <div className="min-h-screen bg-gradient-to-b from-white to-gray-50 text-gray-900 dark:from-gray-950 dark:to-gray-900 dark:text-gray-100">
             {/* ===== ヘッダー ===== */}
-            <header className="sticky top-0 z-30 border-b border-gray-200/70 bg-white/80 backdrop-blur dark:border-gray-800 dark:bg-gray-900/70">
+            <header className="sticky top-0 z-30 border-b border-gray-200/70 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/50 dark:border-gray-800 dark:bg-gray-900/60">
                 <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-                    {/* ロゴ / ブランド */}
                     <div className="flex items-center gap-2">
                         <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600" />
                         <span className="text-sm font-semibold tracking-wide">
                             TodoQuest
                         </span>
                     </div>
-
-                    {/* ユーザー */}
-                    {/* <div className="flex items-center gap-2">
-                        レベル
-                        {users.map((u, idx) => (
-                            <p key={u.id}>{u.level}　　経験値 {u.exp} / {u.exp}</p>
-                            // <div key={u.id}>{u.id} : {u.username} : {u.level} : {u.exp} : {idx}</div>
-                        ))}
-                    </div> */}
-
-                    {/* ログアウト */}
                     <div className="flex items-center gap-3">
                         <span className="hidden text-xs text-gray-500 dark:text-gray-400 sm:inline">
-                            {email ?? 'Guest'}
+                            {loading ? 'Loading…' : (me?.email ?? 'Guest')}
                         </span>
-                        <button onClick={logout} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800">
+                        <button
+                            onClick={logout}
+                            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 shadow-sm transition hover:bg-gray-50 active:translate-y-px dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-750/50"
+                            disabled={loading}
+                        >
                             ログアウト
                         </button>
                     </div>
                 </div>
+                {/* 上部シマー進捗（ロード中のみ） */}
+                {loading && <div className="px-4"><div className="mx-auto max-w-6xl py-1"><ShimmerBar /></div></div>}
             </header>
 
-            {/* ===== シェル（サイドバー + メイン） ===== */}
+            {/* ===== コンテンツ（サイドバー + メイン） ===== */}
             <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 p-4 sm:grid-cols-[220px_minmax(0,1fr)]">
                 {/* ===== サイドバー ===== */}
-                <aside className="sticky top-16 hidden h[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
-                    <nav className="space-y-1">
-                        <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                            メニュー
-                        </div>
-                        <a href="/home"
-                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
-                            <span>📋</span> <span>ホーム</span>
-                        </a>
-                        <a href="/bbs"
-                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
-                            <span>📋</span> <span>タスク掲示板</span>
-                        </a>
-                        {/* <a href="/terms"
-                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
-                            <span>📄</span> <span>利用規約</span>
-                        </a> */}
-                        {/* <a href="/privacy"
-                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
-                            <span>🔒</span> <span>プライバシー</span>
-                        </a> */}
+                {loading ? (
+                    <SkeletonSidebar />
+                ) : (
+                    <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
+                        <nav className="space-y-1">
+                            <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                                メニュー
+                            </div>
 
-                        <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
-                    </nav>
-                </aside>
+                            <Link
+                                href="/home"
+                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                            >
+                                <span>📋</span> <span>ホーム</span>
+                            </Link>
+
+                            <Link
+                                href="/bbs"
+                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                            >
+                                <span>📋</span> <span>タスク掲示板</span>
+                            </Link>
+
+                            <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
+                        </nav>
+                    </aside>
+                )}
 
                 {/* ===== メインコンテンツ ===== */}
-                <main className="space-y-4">
-                    <div style={styles.page}>
-                        <div style={styles.header}>
-                            <h1 style={styles.h1}>タスク掲示板</h1>
-                            <p style={styles.muted}>依頼の投稿と、受注ができるシンプルなページ</p>
+                <main
+                    className="space-y-4"
+                    aria-busy={loading}
+                    aria-live="polite"
+                >
+                    {/* タイトル行 */}
+                    {loading ? <SkeletonHeaderRow /> : (
+                        <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                            <div>
+                                <h1 className="m-0 text-2xl font-semibold tracking-tight">タスク掲示板</h1>
+                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                                    未受注 & 募集中のタスクのみ表示
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setOpen(true)}
+                                className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:translate-y-px"
+                            >
+                                依頼を投稿
+                            </button>
+                        </div>
+                    )}
+
+                    {/* 募集中一覧 */}
+                    <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900/60">
+                        <div className="mb-3 flex items-center justify-between">
+                            <h2 className="text-lg font-semibold tracking-tight">募集中のタスク</h2>
+                            {!loading && (
+                                <span className="text-xs text-gray-500 dark:text-gray-400">{visibleTasks.length} 件</span>
+                            )}
                         </div>
 
-                        <div style={styles.grid}>
-                            {/* 左：依頼フォーム */}
-                            <section style={styles.card}>
-                                <h2 style={styles.h2}>タスクを依頼する</h2>
-                                <div style={styles.formRow}>
-                                    <label style={styles.label}>依頼者（あなたの名前）</label>
-                                    <input
-                                        style={styles.input}
-                                        value={requester}
-                                        onChange={(e) => setRequester(e.target.value)}
-                                        placeholder="例: 安藤"
-                                    />
-                                </div>
-                                <div style={styles.formRow}>
-                                    <label style={styles.label}>タイトル *</label>
-                                    <input
-                                        style={styles.input}
-                                        value={title}
-                                        onChange={(e) => setTitle(e.target.value)}
-                                        placeholder="例: 仕様書のレビュー"
-                                    />
-                                </div>
-                                <div style={styles.formRow}>
-                                    <label style={styles.label}>詳細</label>
-                                    <textarea
-                                        style={styles.textarea}
-                                        value={description}
-                                        onChange={(e) => setDescription(e.target.value)}
-                                        placeholder="依頼内容の詳細を記入してください"
-                                        rows={5}
-                                    />
-                                </div>
-                                <div style={styles.row2}>
-                                    <div style={styles.formRow}>
-                                        <label style={styles.label}>報酬（任意）</label>
-                                        <input
-                                            style={styles.input}
-                                            type="number"
-                                            min={0}
-                                            value={reward}
-                                            onChange={(e) =>
-                                                setReward(e.target.value === '' ? '' : Number(e.target.value))
-                                            }
-                                            placeholder="0"
-                                        />
-                                    </div>
-                                    <div style={styles.formRow}>
-                                        <label style={styles.label}>期日（任意）</label>
-                                        <input
-                                            style={styles.input}
-                                            type="date"
-                                            value={dueDate}
-                                            onChange={(e) => setDueDate(e.target.value)}
-                                        />
-                                    </div>
-                                </div>
-                                <button style={styles.primaryBtn} onClick={addTask}>
-                                    依頼を投稿
-                                </button>
-                                <p style={styles.help}>* は必須項目です。投稿後は右の掲示板に表示されます。</p>
-                            </section>
+                        {loading ? (
+                            <ul className="flex list-none flex-col gap-3">
+                                <SkeletonCard />
+                                <SkeletonCard />
+                                <SkeletonCard />
+                            </ul>
+                        ) : visibleTasks.length === 0 ? (
+                            <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-400">
+                                募集中のタスクはありません。
+                            </div>
+                        ) : (
+                            <ul className="flex list-none flex-col gap-3">
+                                {visibleTasks.map((t) => (
+                                    <li
+                                        key={t.id}
+                                        className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition hover:shadow-md dark:border-gray-800 dark:bg-gray-900/60"
+                                    >
+                                        {/* Hoverアクセント */}
+                                        <div className="pointer-events-none absolute inset-0 opacity-0 transition group-hover:opacity-100">
+                                            <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/0 via-indigo-500/5 to-indigo-500/0" />
+                                        </div>
 
-                            {/* 右：掲示板 */}
-                            <section style={styles.card}>
-                                <div style={styles.listHeader}>
-                                    <h2 style={styles.h2}>タスク掲示板</h2>
-                                    <div>
-                                        <select
-                                            style={styles.select}
-                                            value={filter}
-                                            onChange={(e) => setFilter(e.target.value as typeof filter)}
-                                        >
-                                            <option value="all">すべて</option>
-                                            <option value="open">募集中</option>
-                                            <option value="assigned">対応中</option>
-                                            <option value="done">完了</option>
-                                        </select>
-                                    </div>
-                                </div>
+                                        <div className="relative z-10 grid gap-3 sm:grid-cols-[1fr,auto] sm:items-start">
+                                            <div className="min-w-0">
+                                                <div className="mb-1 flex flex-wrap items-center gap-2">
+                                                    <span className={`select-none ${badgeClass(t.status)}`}>
+                                                        {labelOf(t.status)}
+                                                    </span>
+                                                    <h3 className="m-0 truncate text-base font-medium">{t.title}</h3>
+                                                </div>
 
-                                {filtered.length === 0 ? (
-                                    <p style={styles.muted}>まだタスクがありません。</p>
-                                ) : (
-                                    <ul style={styles.list}>
-                                        {filtered.map((t) => (
-                                            <li key={t.id} style={styles.listItem}>
-                                                <div style={styles.itemMain}>
-                                                    <div style={styles.itemTitleRow}>
-                                                        <span style={styles.badge[t.status]}>{labelOf(t.status)}</span>
-                                                        <h3 style={styles.itemTitle}>{t.title}</h3>
-                                                    </div>
-                                                    {t.description && (
-                                                        <p style={styles.itemDesc}>{t.description}</p>
-                                                    )}
-                                                    <div style={styles.metaRow}>
-                                                        <span style={styles.meta}>
-                                                            依頼者: <strong>{t.requester}</strong>
+                                                {t.description && (
+                                                    <p className="mb-2 whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300">
+                                                        {t.description}
+                                                    </p>
+                                                )}
+
+                                                <div className="flex flex-wrap items-center gap-2 text-xs">
+                                                    <span className={pillClass()}>
+                                                        依頼者ID: <strong className="font-semibold">{t.owner_id}</strong>
+                                                    </span>
+                                                    {typeof t.difficulty === 'number' && (
+                                                        <span className={pillClass()}>
+                                                            難易度: {t.difficulty}
                                                         </span>
-                                                        {t.assignee && (
-                                                            <span style={styles.meta}>
-                                                                担当: <strong>{t.assignee}</strong>
-                                                            </span>
-                                                        )}
-                                                        {t.reward !== undefined && (
-                                                            <span style={styles.meta}>報酬: {t.reward}</span>
-                                                        )}
-                                                        {t.dueDate && (
-                                                            <span style={styles.meta}>期日: {t.dueDate}</span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                <div style={styles.itemActions}>
-                                                    {t.status === 'open' && (
-                                                        <AcceptControls onAccept={(name) => acceptTask(t.id, name)} />
                                                     )}
-                                                    {t.status === 'assigned' && (
-                                                        <div style={styles.actionRow}>
-                                                            <button style={styles.secondaryBtn} onClick={() => cancelAssign(t.id)}>
-                                                                取り消し
-                                                            </button>
-                                                            <button style={styles.primaryBtn} onClick={() => completeTask(t.id)}>
-                                                                完了
-                                                            </button>
-                                                        </div>
+                                                    {typeof t.reward === 'number' && (
+                                                        <span className={pillClass()}>
+                                                            報酬: {t.reward}
+                                                        </span>
                                                     )}
-                                                    {t.status === 'done' && (
-                                                        <span style={styles.mutedSmall}>完了しました</span>
+                                                    {t.due_date && (
+                                                        <span className={pillClass()}>
+                                                            期日: {t.due_date}
+                                                        </span>
                                                     )}
                                                 </div>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
-                            </section>
+                                            </div>
+
+                                            <div className="flex min-w-[220px] flex-col gap-2">
+                                                <button
+                                                    className="rounded-xl border border-indigo-600 bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:translate-y-px disabled:opacity-60 disabled:saturate-50"
+                                                    onClick={() => acceptTask(t.id)}
+                                                    disabled={!me?.id}
+                                                    title={!me?.id ? 'ユーザー情報取得中' : 'このタスクを受注する'}
+                                                >
+                                                    受注する
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </section>
+                </main>
+            </div>
+
+            {/* ===== モーダル（依頼作成） ===== */}
+            {open && (
+                <Modal onClose={() => setOpen(false)} title="新規依頼を作成">
+                    <div className="space-y-4">
+                        <div className="space-y-1.5">
+                            <label className="text-xs text-gray-600 dark:text-gray-300">タイトル *</label>
+                            <input
+                                ref={firstInputRef}
+                                className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-900"
+                                value={title}
+                                onChange={(e) => setTitle(e.target.value)}
+                                placeholder="例: 仕様書のレビュー"
+                            />
                         </div>
 
-                        <style jsx global>{`
-                            html, body {
-                                background: #0b0c10;
-                                color: #e5e7eb;
-                                font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Noto Sans, Helvetica, Arial, 'Apple Color Emoji', 'Segoe UI Emoji';
-                            }
-                        `}</style>
+                        <div className="space-y-1.5">
+                            <label className="text-xs text-gray-600 dark:text-gray-300">詳細</label>
+                            <textarea
+                                className="w-full resize-y rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-900"
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
+                                placeholder="依頼内容の詳細を記入してください"
+                                rows={5}
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div className="space-y-1.5">
+                                <label className="text-xs text-gray-600 dark:text-gray-300">難易度（1–5）</label>
+                                <select
+                                    className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none ring-indigo-500/20 focus:ring-2 dark:border-gray-700 dark:bg-gray-900"
+                                    value={difficulty}
+                                    onChange={(e) => setDifficulty(Number(e.target.value))}
+                                >
+                                    {[1, 2, 3, 4, 5].map((n) => (
+                                        <option key={n} value={n}>{n}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="text-xs text-gray-600 dark:text-gray-300">報酬（任意）</label>
+                                <input
+                                    className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-900"
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={reward}
+                                    onChange={(e) => {
+                                        const v = e.target.value;
+                                        if (v === '') {
+                                            setReward('');
+                                        } else {
+                                            const num = Number(v);
+                                            setReward(Number.isNaN(num) ? '' : Math.max(0, Math.floor(num)));
+                                        }
+                                    }}
+                                    placeholder="0"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="text-xs text-gray-600 dark:text-gray-300">期日（任意）</label>
+                            <input
+                                type="date"
+                                className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-900 dark:[&::-webkit-calendar-picker-indicator]:invert"
+                                value={dueDate}
+                                onChange={(e) => setDueDate(e.target.value)}
+                            />
+                        </div>
+
+                        <div className="flex justify-end gap-2 pt-2">
+                            <button
+                                onClick={() => setOpen(false)}
+                                className="rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm transition hover:bg-gray-50 active:translate-y-px dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+                            >
+                                キャンセル
+                            </button>
+                            <button
+                                onClick={addTaskFromModal}
+                                className="rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:translate-y-px disabled:opacity-60"
+                                disabled={!me?.id}
+                                title={!me?.id ? 'ユーザー情報取得中' : '依頼を投稿'}
+                            >
+                                依頼を投稿
+                            </button>
+                        </div>
                     </div>
-                </main>
+                </Modal>
+            )}
+        </div>
+    );
+}
+
+/** シンプルなモーダル（背景ブラー + カード） */
+function Modal(props: { title: string; onClose: () => void; children: React.ReactNode }) {
+    return (
+        <div
+            className="fixed inset-0 z-50 grid place-items-center p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label={props.title}
+        >
+            <div
+                className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                onClick={props.onClose}
+            />
+            <div className="relative z-10 w-full max-w-xl rounded-2xl border border-gray-200 bg-white/95 p-5 shadow-xl ring-1 ring-black/5 dark:border-gray-800 dark:bg-gray-900/95 dark:ring-white/10">
+                <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-base font-semibold">{props.title}</h3>
+                    <button
+                        onClick={props.onClose}
+                        className="rounded-md p-1 text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                        aria-label="閉じる"
+                        title="閉じる"
+                    >
+                        ✕
+                    </button>
+                </div>
+                {props.children}
             </div>
         </div>
     );
-}
-
-function AcceptControls(props: { onAccept: (name: string) => void }) {
-    const [name, setName] = useState('');
-    return (
-        <div style={{ display: 'flex', gap: 8 }}>
-            <input
-                style={styles.input}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="あなたの名前"
-            />
-            <button style={styles.primaryBtn} onClick={() => props.onAccept(name.trim())}>
-                受ける
-            </button>
-        </div>
-    );
-}
-
-/** 表示用ラベル */
-function labelOf(s: Task['status']): string {
-    switch (s) {
-        case 'open':
-            return '募集中';
-        case 'assigned':
-            return '対応中';
-        case 'done':
-            return '完了';
-        default:
-            return s;
-    }
-}
-
-/** 最低限のインラインスタイル */
-const styles: { [k: string]: any } = {
-    page: {
-        maxWidth: 1100,
-        margin: '0 auto',
-        padding: '24px 16px',
-    },
-    header: {
-        marginBottom: 16,
-    },
-    h1: {
-        fontSize: 28,
-        margin: 0,
-    },
-    h2: {
-        fontSize: 20,
-        margin: '0 0 12px',
-    },
-    muted: {
-        opacity: 0.75,
-        fontSize: 14,
-        marginTop: 4,
-    },
-    mutedSmall: {
-        opacity: 0.7,
-        fontSize: 12,
-    },
-    help: {
-        opacity: 0.7,
-        fontSize: 12,
-        marginTop: 8,
-    },
-    grid: {
-        display: 'grid',
-        gridTemplateColumns: '1fr',
-        gap: 16,
-    },
-    card: {
-        background: '#111217',
-        border: '1px solid #1f2937',
-        borderRadius: 12,
-        padding: 16,
-    },
-    formRow: {
-        display: 'flex',
-        flexDirection: 'column' as const,
-        gap: 6,
-        marginBottom: 12,
-    },
-    row2: {
-        display: 'grid',
-        gridTemplateColumns: '1fr 1fr',
-        gap: 12,
-        marginBottom: 12,
-    },
-    label: {
-        fontSize: 12,
-        opacity: 0.9,
-    },
-    input: {
-        width: '100%',
-        padding: '10px 12px',
-        background: '#0b0c10',
-        border: '1px solid #2a3342',
-        borderRadius: 8,
-        color: '#e5e7eb',
-        outline: 'none',
-    },
-    textarea: {
-        width: '100%',
-        padding: '10px 12px',
-        background: '#0b0c10',
-        border: '1px solid #2a3342',
-        borderRadius: 8,
-        color: '#e5e7eb',
-        resize: 'vertical' as const,
-    },
-    primaryBtn: {
-        padding: '10px 14px',
-        borderRadius: 10,
-        background: '#2563eb',
-        border: '1px solid #2563eb',
-        color: '#fff',
-        fontWeight: 600,
-        cursor: 'pointer',
-    },
-    secondaryBtn: {
-        padding: '10px 14px',
-        borderRadius: 10,
-        background: '#0b0c10',
-        border: '1px solid #2a3342',
-        color: '#e5e7eb',
-        fontWeight: 600,
-        cursor: 'pointer',
-    },
-    select: {
-        padding: '8px 10px',
-        background: '#0b0c10',
-        border: '1px solid #2a3342',
-        borderRadius: 8,
-        color: '#e5e7eb',
-    },
-    listHeader: {
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 8,
-    },
-    list: {
-        listStyle: 'none',
-        padding: 0,
-        margin: 0,
-        display: 'flex',
-        flexDirection: 'column' as const,
-        gap: 8,
-    },
-    listItem: {
-        display: 'flex',
-        gap: 12,
-        alignItems: 'flex-start',
-        justifyContent: 'space-between',
-        border: '1px solid #1f2937',
-        borderRadius: 12,
-        padding: 12,
-        background: '#0e1014',
-    },
-    itemMain: {
-        flex: 1,
-        minWidth: 0,
-    },
-    itemTitleRow: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        marginBottom: 6,
-    },
-    itemTitle: {
-        fontSize: 16,
-        margin: 0,
-        wordBreak: 'break-word' as const,
-    },
-    itemDesc: {
-        margin: '6px 0 10px',
-        opacity: 0.95,
-        lineHeight: 1.6,
-        whiteSpace: 'pre-wrap' as const,
-    },
-    metaRow: {
-        display: 'flex',
-        flexWrap: 'wrap' as const,
-        gap: 12,
-        fontSize: 12,
-        opacity: 0.85,
-    },
-    meta: {
-        border: '1px solid #1f2937',
-        padding: '2px 8px',
-        borderRadius: 999,
-        background: '#0b0c10',
-    },
-    itemActions: {
-        display: 'flex',
-        flexDirection: 'column' as const,
-        gap: 8,
-        minWidth: 220,
-    },
-    actionRow: {
-        display: 'flex',
-        gap: 8,
-    },
-    badge: {
-        open: {
-            fontSize: 12,
-            padding: '2px 8px',
-            borderRadius: 999,
-            background: '#0b3a1a',
-            border: '1px solid #14532d',
-            color: '#c6f6d5',
-        },
-        assigned: {
-            fontSize: 12,
-            padding: '2px 8px',
-            borderRadius: 999,
-            background: '#2b1a00',
-            border: '1px solid #7c5200',
-            color: '#fde68a',
-        },
-        done: {
-            fontSize: 12,
-            padding: '2px 8px',
-            borderRadius: 999,
-            background: '#0a223d',
-            border: '1px solid #1e40af',
-            color: '#bfdbfe',
-        },
-    },
-};
-
-/* 画面幅が広い場合のみ2カラムに */
-if (typeof window !== 'undefined') {
-    const mq = window.matchMedia('(min-width: 920px)');
-    if (mq.matches) {
-        styles.grid.gridTemplateColumns = '1fr 1fr';
-    }
 }

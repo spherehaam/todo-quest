@@ -83,6 +83,17 @@ async function dbUpdateTaskStatus(params: {
     return rows[0] as Task;
 }
 
+async function dbGetTasksBbs(): Promise<Task[]> {
+    const rows = await sql`
+        SELECT id, owner_id, title, description, due_date, status, created_at, contractor
+        FROM tasks
+        WHERE contractor IS NULL
+        AND status = 'open'
+        ORDER BY created_at DESC
+    `;
+    return rows as Task[];
+}
+
 // ---------------------------------------------------------
 // ハンドラ
 // ---------------------------------------------------------
@@ -259,5 +270,127 @@ export async function handlePatchTasksStatus(req: Request) {
 
         return NextResponse.json({ ok: true, updated }, { status: 200 });
     } catch {
+    }
+}
+
+/**
+ * POST /api/tasks (BBS用)
+ * - 依頼を新規作成（未受注・open固定）
+ * body:
+ *  - title: string (必須)
+ *  - description: string（任意）
+ *  - due_date: ISO文字列 or YYYY-MM-DD（任意）
+ *  - difficulty: 1..5（任意。未指定時は 1）
+ *  - reward: 0 以上の整数（任意。未指定時は 0）
+ */
+export async function handlePostTasksBbs(req: Request) {
+    console.log('handlePostTasksBbs');
+    try {
+        // 認証
+        const token = await readAccessTokenFromCookie();
+        if (!token) {
+            return NextResponse.json({ ok: false, error: 'no_auth' }, { status: 401 });
+        }
+        const payload = await verifyAccess(token);
+
+        // CSRF
+        await requireCsrf();
+
+        type Body = {
+            title?: string;
+            description?: string;
+            due_date?: string;
+            difficulty?: unknown;
+            reward?: unknown;
+        };
+
+        let body: Body = {};
+        try {
+            body = (await req.json()) as Body;
+        } catch {
+            body = {};
+        }
+
+        // title 必須
+        const title = (body?.title ?? '').trim();
+        if (!title) {
+            return NextResponse.json({ ok: false, error: 'title_required' }, { status: 400 });
+        }
+
+        // description
+        const rawDesc = (body?.description ?? '').trim();
+        const description = rawDesc.length > 0 ? rawDesc : null;
+
+        // due_date（不正は null）
+        let due_date: string | null = null;
+        if (body?.due_date) {
+            const d = new Date(body.due_date);
+            if (!isNaN(d.getTime())) {
+                // DBが date 型なので、時間は不要。ISOでも date への暗黙変換が効く環境が多いが、
+                // 明確に日付だけを入れたい場合は YYYY-MM-DD に整形してもOK。
+                due_date = d.toISOString();
+            }
+        }
+
+        // difficulty: 1..5（未指定は 1）
+        let difficulty = 1;
+        if (typeof body?.difficulty === 'number') {
+            difficulty = Math.min(5, Math.max(1, Math.floor(body.difficulty)));
+        } else if (typeof body?.difficulty === 'string' && body.difficulty !== '') {
+            const n = Number(body.difficulty);
+            if (!Number.isNaN(n)) difficulty = Math.min(5, Math.max(1, Math.floor(n)));
+        }
+
+        // reward: 0 以上の整数（未指定は 0）
+        let reward = 0;
+        if (typeof body?.reward === 'number') {
+            reward = Math.max(0, Math.floor(body.reward));
+        } else if (typeof body?.reward === 'string' && body.reward !== '') {
+            const n = Number(body.reward);
+            if (!Number.isNaN(n)) reward = Math.max(0, Math.floor(n));
+        }
+
+        // 掲示板の新規依頼は未受注 & open 固定
+        const ownerId = String(payload.sub);
+        const status: Status = 'open';
+        const contractor: string | null = null;
+
+        // ここでは BBS 用に難易度・報酬も保存する INSERT を直書き
+        const rows = await sql`
+            INSERT INTO tasks
+                (owner_id, title, description, due_date, status, difficulty, reward, contractor)
+            VALUES
+                (${ownerId}, ${title}, ${description},
+                 ${due_date ? new Date(due_date) : null}, ${status},
+                 ${difficulty}, ${reward}, ${contractor})
+            RETURNING id, owner_id, title, description, due_date, status, created_at, contractor
+        `;
+
+        const task = rows[0] as Task;
+        return NextResponse.json({ ok: true, task }, { status: 201 });
+    } catch (e) {
+        const msg =
+            (e as Error).message === 'csrf_mismatch'
+                ? 'csrf_mismatch'
+                : 'create_failed';
+        const status = msg === 'csrf_mismatch' ? 403 : 500;
+        return NextResponse.json({ ok: false, error: msg }, { status });
+    }
+}
+
+export async function handleGetTasksBbs() {
+    console.log('handleGetTasksBbs1');
+    try {
+        // 認証チェック
+        const token = await readAccessTokenFromCookie();
+        if (!token) {
+            return NextResponse.json({ ok: false, error: 'no_auth' }, { status: 401 });
+        }
+        const payload = await verifyAccess(token);
+
+        const tasks = await dbGetTasksBbs();
+        return NextResponse.json({ ok: true, tasks });
+    } catch {
+        return NextResponse.json({ ok: false, error: 'failed_to_fetch' }, { status: 500 });
     }
 }
