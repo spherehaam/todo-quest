@@ -11,6 +11,7 @@ type Task = {
     due_date?: string | null;
     status: 'open' | 'in_progress' | 'done';
     created_at: string;
+    contractor: string;
 };
 
 type Users = {
@@ -120,8 +121,7 @@ function StatusCell(props: {
         } catch (err) {
             onRevert(prev); // 失敗時ロールバック
             console.error(err);
-            console.error('ステータスの更新に失敗しました。');
-            // alert('ステータスの更新に失敗しました。');
+            alert('ステータスの更新に失敗しました。');
         } finally {
             setSaving(false);
             setEditing(false);
@@ -188,16 +188,23 @@ export default function HomePage() {
             const me = await meRes.json();
             setEmail(me.email);
 
-            // 2) タスク一覧取得
-            await fetchTasks();
+            // 2) ユーザー取得（配列を返す）
+            const usersFetched = await fetchUsers();
 
-            // 3) ユーザー情報取得
-            await fetchUsers();
+            // 3) タスク一覧取得
+            if (usersFetched.length > 0) {
+                await fetchTasks(usersFetched[0].id);
+            }
+
             setLoading(false);
         }
 
-        async function fetchTasks() {
-            const res = await fetch('/api/tasks', { credentials: 'include' });
+        async function fetchTasks(contractor?: string) {
+            const url = contractor
+                ? `/api/tasks?contractor=${encodeURIComponent(contractor)}`
+                : `/api/tasks`;
+
+            const res = await fetch(url, { credentials: 'include' });
             if (res.ok) {
                 const data = await res.json();
                 setTasks(data.tasks ?? []);
@@ -206,18 +213,27 @@ export default function HomePage() {
             }
         }
 
-        async function fetchUsers() {
+        async function fetchUsers(): Promise<Array<{ id: string }>> {
             const res = await fetch('/api/users', { credentials: 'include' });
-            if (res.ok) {
-                const data = await res.json();
-                setUsers(data.users ?? []);
-            } else {
+            if (!res.ok) {
                 setUsers([]);
+                return [];
             }
+            const data = await res.json();
+            setUsers(data.users ?? []);
+            return data.users ?? [];     // ← 呼び出し元で即使える
         }
 
         bootstrap();
     }, [router]);
+
+    // 状態が更新された「後」の users を見たい場合は、別の useEffect でログ
+    useEffect(() => {
+        if (users.length > 0) {
+            console.log('users (state changed):', users);
+            console.log('users[0].id:', users[0].id);
+        }
+    }, [users]);
 
     /** タスク追加 */
     async function addTask() {
@@ -244,6 +260,8 @@ export default function HomePage() {
                 payload.due_date = d.toISOString();
             }
         }
+
+        payload.contractor = users[0].id;
 
         const res = await fetch('/api/tasks', {
             method: 'POST',
@@ -331,7 +349,11 @@ export default function HomePage() {
                         </div>
                         <a href="/home"
                             className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
-                            <span>📋</span> <span>タスク</span>
+                            <span>📋</span> <span>ホーム</span>
+                        </a>
+                        <a href="/bbs"
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
+                            <span>📋</span> <span>タスク掲示板</span>
                         </a>
                         {/* <a href="/terms"
                             className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">

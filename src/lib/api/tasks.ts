@@ -19,6 +19,7 @@ export type Task = {
     due_date: string | null; // ISO文字列
     status: 'open' | 'in_progress' | 'done';
     created_at: string; // ISO文字列
+    contractor: string;
 };
 
 type Status = Task['status'];
@@ -35,11 +36,11 @@ function isStatus(value: unknown): value is Status {
 // ---------------------------------------------------------
 // DB アクセス
 // ---------------------------------------------------------
-async function dbGetTasks(userId: string): Promise<Task[]> {
+async function dbGetTasks(contractor: string): Promise<Task[]> {
     const rows = await sql`
-        SELECT id, owner_id, title, description, due_date, status, created_at
+        SELECT id, owner_id, title, description, due_date, status, created_at, contractor
         FROM tasks
-        WHERE owner_id = ${userId}
+        WHERE contractor = ${contractor}
         ORDER BY created_at DESC
     `;
     return rows as Task[];
@@ -54,13 +55,14 @@ async function dbCreateTask(params: {
     description: string | null;
     due_date: string | null; // ISO or null
     status: Status;
+    contractor: string;
 }): Promise<Task> {
-    const { userId, title, description, due_date, status } = params;
+    const { userId, title, description, due_date, status, contractor } = params;
 
     const rows = await sql`
-        INSERT INTO tasks (owner_id, title, description, due_date, status)
-        VALUES (${userId}, ${title}, ${description}, ${due_date ? new Date(due_date) : null}, ${status})
-        RETURNING id, owner_id, title, description, due_date, status, created_at
+        INSERT INTO tasks (owner_id, title, description, due_date, status, contractor)
+        VALUES (${userId}, ${title}, ${description}, ${due_date ? new Date(due_date) : null}, ${status}, ${contractor})
+        RETURNING id, owner_id, title, description, due_date, status, created_at, contractor
     `;
     return rows[0] as Task;
 }
@@ -89,26 +91,27 @@ async function dbUpdateTaskStatus(params: {
  * GET /api/tasks
  * 認証済みユーザーのタスク一覧を返す
  */
-export async function handleGetTasks() {
+export async function handleGetTasks(req: Request) {
     try {
-        // アクセストークンをCookieから取得
+        // 認証チェック
         const token = await readAccessTokenFromCookie();
         if (!token) {
-            return NextResponse.json(
-                { ok: false, error: 'no_auth' },
-                { status: 401 }
-            );
+            return NextResponse.json({ ok: false, error: 'no_auth' }, { status: 401 });
         }
         const payload = await verifyAccess(token);
 
-        // DBからタスク一覧を取得
-        const tasks = await dbGetTasks(String(payload.sub));
+        // クエリパラメータから contractor を取得
+        const { searchParams } = new URL(req.url);
+        const contractorParam = searchParams.get('contractor');
+
+        // contractor が指定されていればそれを、なければ自分のIDを使う
+        const contractor = contractorParam ?? String(payload.sub);
+
+        // DBから取得
+        const tasks = await dbGetTasks(contractor);
         return NextResponse.json({ ok: true, tasks });
     } catch {
-        return NextResponse.json(
-            { ok: false, error: 'failed_to_fetch' },
-            { status: 500 }
-        );
+        return NextResponse.json({ ok: false, error: 'failed_to_fetch' }, { status: 500 });
     }
 }
 
@@ -141,6 +144,7 @@ export async function handlePostTasks(req: Request) {
             description?: string;
             due_date?: string;
             status?: Status | string; // 外部入力なので string も受ける
+            contractor?: string;
         };
 
         let body: Body = {};
@@ -182,12 +186,15 @@ export async function handlePostTasks(req: Request) {
         }
         const status: Status = incomingStatus;
 
+        const contractor = (body?.contractor ?? '').trim();
+
         const task = await dbCreateTask({
             userId: String(payload.sub),
             title,
             description,
             due_date,
             status,
+            contractor,
         });
 
         return NextResponse.json({ ok: true, task }, { status: 201 });
