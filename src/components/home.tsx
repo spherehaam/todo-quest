@@ -58,6 +58,111 @@ function fmtDateOnly(input?: string | null): string {
     return d.toLocaleDateString();
 }
 
+/** ===== ステータス編集用 追加分（既存に影響しない形で定義） ===== */
+type TaskStatus = 'open' | 'in_progress' | 'done';
+
+const STATUS_LABEL: Record<TaskStatus, string> = {
+    open: '未完了',
+    in_progress: '進行中',
+    done: '完了',
+};
+
+const ALL_STATUSES: TaskStatus[] = ['open', 'in_progress', 'done'];
+
+/** ステータス更新API（/api/tasks/[id]/status に PATCH を想定） */
+async function updateTaskStatus(taskId: string, next: TaskStatus) {
+    const res = await fetch(`/api/tasks/status`, {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': readCookie('csrf_token') ?? '',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ taskId: taskId, status: next }),
+    });
+    if (!res.ok) {
+        const msg = await res.text().catch(() => '');
+        throw new Error(msg || `Failed to update status (${res.status})`);
+    }
+    const json = await res.json().catch(() => ({}));
+    return json as { status: TaskStatus };
+}
+
+/** ステータスセル（クリックでセレクトに切替 → 楽観的更新） */
+function StatusCell(props: {
+    taskId: string;
+    value: TaskStatus;
+    onLocalChange: (next: TaskStatus) => void;
+    onRevert: (prev: TaskStatus) => void;
+}) {
+    const { taskId, value, onLocalChange, onRevert } = props;
+    const [editing, setEditing] = useState(false);
+    const [saving, setSaving] = useState(false);
+
+    function handleKeyDown(e: React.KeyboardEvent) {
+        if (!editing) return;
+        if (e.key === 'Escape') {
+            setEditing(false);
+        }
+    }
+
+    async function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
+        const next = e.target.value as TaskStatus;
+        if (next === value) {
+            setEditing(false);
+            return;
+        }
+        const prev = value;
+        onLocalChange(next); // 楽観的更新
+        setSaving(true);
+        try {
+            await updateTaskStatus(taskId, next);
+        } catch (err) {
+            onRevert(prev); // 失敗時ロールバック
+            console.error(err);
+            console.error('ステータスの更新に失敗しました。');
+            // alert('ステータスの更新に失敗しました。');
+        } finally {
+            setSaving(false);
+            setEditing(false);
+        }
+    }
+
+    if (!editing) {
+        return (
+            <button
+                type="button"
+                className="px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition text-left w-full"
+                onClick={() => setEditing(true)}
+                onKeyDown={handleKeyDown}
+                aria-label={`ステータスを編集: 現在は ${STATUS_LABEL[value]}`}
+            >
+                {STATUS_LABEL[value]}
+            </button>
+        );
+    }
+
+    return (
+        <select
+            className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1"
+            autoFocus
+            defaultValue={value}
+            onChange={handleChange}
+            onBlur={() => setEditing(false)}
+            disabled={saving}
+            onKeyDown={handleKeyDown}
+            aria-label="ステータスを選択"
+        >
+            {ALL_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                    {STATUS_LABEL[s]}
+                </option>
+            ))}
+        </select>
+    );
+}
+/** ===== ここまで追加分 ===== */
+
 export default function HomePage() {
     const [email, setEmail] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
@@ -69,7 +174,7 @@ export default function HomePage() {
     const [newStatus, setNewStatus] = useState<'open' | 'in_progress' | 'done'>('open');
 
     const [msg, setMsg] = useState('');
-    const [users, serUsers] = useState<Users[]>([]);
+    const [users, setUsers] = useState<Users[]>([]);
     const router = useRouter();
 
     useEffect(() => {
@@ -105,9 +210,9 @@ export default function HomePage() {
             const res = await fetch('/api/users', { credentials: 'include' });
             if (res.ok) {
                 const data = await res.json();
-                serUsers(data.users ?? []);
+                setUsers(data.users ?? []);
             } else {
-                serUsers([]);
+                setUsers([]);
             }
         }
 
@@ -314,9 +419,24 @@ export default function HomePage() {
                                             <td className="px-4 py-3">{t.description ?? '-'}</td>
                                             <td className="px-4 py-3">{fmtDateOnly(t.due_date)}</td>
                                             <td className="px-4 py-3">
-                                                {t.status === 'open' && '未完了'}
-                                                {t.status === 'in_progress' && '進行中'}
-                                                {t.status === 'done' && '完了'}
+                                                <StatusCell
+                                                    taskId={t.id}
+                                                    value={t.status}
+                                                    onLocalChange={(next) => {
+                                                        setTasks((prev) =>
+                                                            prev.map((x) =>
+                                                                x.id === t.id ? { ...x, status: next } : x
+                                                            )
+                                                        );
+                                                    }}
+                                                    onRevert={(prevStatus) => {
+                                                        setTasks((prev) =>
+                                                            prev.map((x) =>
+                                                                x.id === t.id ? { ...x, status: prevStatus } : x
+                                                            )
+                                                        );
+                                                    }}
+                                                />
                                             </td>
                                             <td className="px-4 py-3">{fmtDate(t.created_at)}</td>
                                         </tr>

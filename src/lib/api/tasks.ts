@@ -65,6 +65,26 @@ async function dbCreateTask(params: {
     return rows[0] as Task;
 }
 
+/** 単一タスクのステータスを更新して返す（本人のタスクのみ） */
+async function dbUpdateTaskStatus(params: {
+    userId: string;
+    taskId: string;
+    status: Status;
+}): Promise<{ id: string; status: Status } | null> {
+    const { userId, taskId, status } = params;
+    const rows = await sql`
+        UPDATE tasks
+        SET status = ${status}
+        WHERE id = ${taskId} AND owner_id = ${userId}
+        RETURNING id, status
+    `;
+    return rows[0] as Task;
+}
+
+// ---------------------------------------------------------
+// ハンドラ
+// ---------------------------------------------------------
+
 /**
  * GET /api/tasks
  * 認証済みユーザーのタスク一覧を返す
@@ -102,6 +122,7 @@ export async function handleGetTasks() {
  *  - status: 'open' | 'in_progress' | 'done'（任意：未指定は 'open'）
  */
 export async function handlePostTasks(req: Request) {
+    console.log('handlePostTasks');
     try {
         // アクセストークン検証
         const token = await readAccessTokenFromCookie();
@@ -177,5 +198,59 @@ export async function handlePostTasks(req: Request) {
                 : 'create_failed';
         const status = msg === 'csrf_mismatch' ? 403 : 500;
         return NextResponse.json({ ok: false, error: msg }, { status });
+    }
+}
+
+/**
+ * PATCH /api/tasks/status
+ * 単一 or 複数タスクの「ステータス」を更新（最小実装）。
+ *
+ * 受け付けるボディの形：
+ *  1) 単一更新:
+ *     { "id": "<taskId>", "status": "open" | "in_progress" | "done" }
+ *
+ * レスポンス:
+ *  - 単一: { ok: true, updated: { id, status } }
+ *  - 複数: { ok: true, updated: [{ id, status }, ...] }
+ */
+export async function handlePatchTasksStatus(req: Request) {
+    try {
+        // 認証
+        const token = await readAccessTokenFromCookie();
+        if (!token) {
+            return NextResponse.json({ ok: false, error: 'no_auth' }, { status: 401 });
+        }
+        const payload = await verifyAccess(token);
+
+        // CSRF
+        await requireCsrf();
+
+        type SingleBody = { taskId?: string; status?: unknown };
+        type MultiBody = { updates?: Array<{ taskId?: string; status?: unknown }> };
+        let body: SingleBody & MultiBody = {};
+        try {
+            body = (await req.json()) as SingleBody & MultiBody;
+        } catch {
+        }
+
+        const userId = String(payload.sub);
+
+        // 単一更新パス
+        const taskId = (body?.taskId ?? '').trim();
+        const st = body?.status;
+        if (!taskId || !isStatus(st) || !ALLOWED_STATUS.has(st)) {
+            return NextResponse.json(
+                { ok: false, error: 'invalid_payload' },
+                { status: 400 }
+            );
+        }
+
+        const updated = await dbUpdateTaskStatus({ userId, taskId, status: st });
+        if (!updated) {
+            return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 });
+        }
+
+        return NextResponse.json({ ok: true, updated }, { status: 200 });
+    } catch {
     }
 }
