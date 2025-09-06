@@ -12,7 +12,7 @@ type TaskStatus = 'open' | 'in_progress' | 'done';
 type Task = {
     id: string;
     owner_id: string;
-    owner_name?: string; // ← 追加：APIでJOINして返せるならここに名前
+    owner_name?: string;
     title: string;
     description: string | null;
     difficulty?: number;
