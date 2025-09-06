@@ -1,17 +1,15 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-
-type TaskStatus = 'open' | 'in_progress' | 'done';
 
 type Task = {
     id: string;
     title: string;
     description?: string | null;
-    due_date?: string | null;           // ISO/日付文字列
-    status: TaskStatus;
-    created_at: string;                 // ISO
+    due_date?: string | null;
+    status: 'open' | 'in_progress' | 'done';
+    created_at: string;
     contractor: string;
 };
 
@@ -26,7 +24,6 @@ type Users = {
 // ユーティリティ
 // ------------------------------
 
-/** Cookie から値を取得（未設定は undefined） */
 function readCookie(name: string) {
     return document.cookie
         .split('; ')
@@ -34,78 +31,74 @@ function readCookie(name: string) {
         ?.split('=')[1];
 }
 
-/** 日時文字列 → ローカル日時表示（不正値は '-'） */
 function fmtDate(input?: string | null): string {
-    if (!input) return '-';
+    if (!input) {
+        return '-';
+    }
     const d = new Date(input);
-    if (isNaN(d.getTime())) return '-';
+    if (isNaN(d.getTime())) {
+        return '-';
+    }
     return d.toLocaleString();
 }
 
-/** 日付文字列 → ローカル日付表示（不正値は '-'） */
 function fmtDateOnly(input?: string | null): string {
-    if (!input) return '-';
+    if (!input) {
+        return '-';
+    }
     const d = new Date(input);
-    if (isNaN(d.getTime())) return '-';
+    if (isNaN(d.getTime())) {
+        return '-';
+    }
     return d.toLocaleDateString();
 }
 
-/** `<input type="date">` の値(YYYY-MM-DD)をそのまま送る。時差ズレ防止のため ISO 変換しない */
-function normalizeDateForApi(localDate: string | undefined): string | undefined {
-    if (!localDate) return undefined;
-    // 年月日形式のみを許容
-    return /^\d{4}-\d{2}-\d{2}$/.test(localDate) ? localDate : undefined;
-}
+type TaskStatus = 'open' | 'in_progress' | 'done';
 
-/** fetch レスポンスの JSON を安全に取得（失敗時は {}） */
-async function safeJson<T = unknown>(res: Response): Promise<T | {}> {
-    try {
-        return (await res.json()) as T;
-    } catch {
-        return {};
-    }
-}
-
-/** 共通 fetch（JSON想定・エラー時に例外） */
-async function fetchJson<T = unknown>(input: RequestInfo, init?: RequestInit): Promise<{ ok: true; data: T } | { ok: false; data: any; status: number }> {
-    const res = await fetch(input, init);
-    const data = await safeJson<T>(res);
-    if (res.ok) {
-        return { ok: true, data: data as T };
-    }
-    return { ok: false, data, status: res.status };
-}
-
-// ------------------------------
-// ステータス表示
-// ------------------------------
 const STATUS_LABEL: Record<TaskStatus, string> = {
     open: '未完了',
     in_progress: '進行中',
-    done: '完了'
+    done: '完了',
 };
+
 const ALL_STATUSES: TaskStatus[] = ['open', 'in_progress', 'done'];
 
-/** ステータス更新 API */
-async function updateTaskStatus(taskId: string, next: TaskStatus) {
-    const csrf = readCookie('csrf_token') ?? '';
-    if (!csrf) {
-        throw new Error('CSRFトークンが見つかりません。ログインし直してください。');
+/** fetch → JSON の共通化（JSON失敗にも強い） */
+async function safeJson<T>(res: Response): Promise<T | null> {
+    try {
+        return (await res.json()) as T;
+    } catch {
+        return null;
     }
-    const res = await fetch('/api/tasks/status', {
+}
+
+/** JSON API ヘルパー */
+async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<{ res: Response; data: T | null }> {
+    const res = await fetch(input, init);
+    const data = await safeJson<T>(res);
+    return { res, data };
+}
+
+// ------------------------------
+// ステータスセル
+// ------------------------------
+
+async function updateTaskStatus(taskId: string, next: TaskStatus) {
+    const res = await fetch(`/api/tasks/status`, {
         method: 'PATCH',
         headers: {
             'Content-Type': 'application/json',
-            'X-CSRF-Token': csrf
+            'X-CSRF-Token': readCookie('csrf_token') ?? '',
         },
         credentials: 'include',
-        body: JSON.stringify({ taskId, status: next })
+        body: JSON.stringify({ taskId: taskId, status: next }),
     });
     if (!res.ok) {
         const msg = await res.text().catch(() => '');
         throw new Error(msg || `Failed to update status (${res.status})`);
     }
-    return (await res.json()) as { status: TaskStatus };
+    const json = await res.json().catch(() => (null));
+    return json as { status: TaskStatus } | null;
 }
 
 function StatusCell(props: {
@@ -120,7 +113,9 @@ function StatusCell(props: {
 
     function handleKeyDown(e: React.KeyboardEvent) {
         if (!editing) return;
-        if (e.key === 'Escape') setEditing(false);
+        if (e.key === 'Escape') {
+            setEditing(false);
+        }
     }
 
     async function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
@@ -130,12 +125,12 @@ function StatusCell(props: {
             return;
         }
         const prev = value;
-        onLocalChange(next);       // 楽観的更新
+        onLocalChange(next);
         setSaving(true);
         try {
             await updateTaskStatus(taskId, next);
         } catch (err) {
-            onRevert(prev);        // 失敗時は元に戻す
+            onRevert(prev);
             console.error(err);
             alert('ステータスの更新に失敗しました。');
         } finally {
@@ -266,10 +261,12 @@ export default function HomePage() {
     const [email, setEmail] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [tasks, setTasks] = useState<Task[]>([]);
+
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
     const [newDueLocal, setNewDueLocal] = useState(''); // YYYY-MM-DD
     const [newStatus, setNewStatus] = useState<TaskStatus>('open');
+
     const [msg, setMsg] = useState('');
     const [users, setUsers] = useState<Users[]>([]);
     const router = useRouter();
@@ -295,21 +292,23 @@ export default function HomePage() {
                     router.replace('/'); // 未ログイン→ログイン画面へ
                     return;
                 }
-                const me = await meRes.json();
+                const me = await meRes.json() as { email?: string | null };
                 setEmail(me.email ?? null);
 
                 // ユーザー一覧
-                const uRes = await fetchJson<{ users: Users[] }>('/api/users', { credentials: 'include', signal: controller.signal as any });
-                const list = uRes.ok ? uRes.data.users ?? [] : [];
+                type UsersResp = { users: Users[] };
+                const uRes = await fetchJson<UsersResp>('/api/users', { credentials: 'include', signal: controller.signal as any });
+                const list = uRes.res.ok ? (uRes.data?.users ?? []) : [];
                 setUsers(list);
 
                 // とりあえず先頭ユーザーでタスク取得（※本来は選択UIが望ましい）
                 const contractor = list[0]?.id;
                 const url = contractor ? `/api/tasks?contractor=${encodeURIComponent(contractor)}` : '/api/tasks';
-                const tRes = await fetchJson<{ tasks: Task[] }>(url, { credentials: 'include', signal: controller.signal as any });
-                setTasks(tRes.ok ? tRes.data.tasks ?? [] : []);
-            } catch (e: any) {
-                if (e?.name !== 'AbortError') {
+                type TasksResp = { tasks: Task[] };
+                const tRes = await fetchJson<TasksResp>(url, { credentials: 'include', signal: controller.signal as any });
+                setTasks(tRes.res.ok ? (tRes.data?.tasks ?? []) : []);
+            } catch (e: unknown) {
+                if ((e as { name?: string })?.name !== 'AbortError') {
                     console.error(e);
                     setMsg('初期読み込みに失敗しました。');
                 }
@@ -320,7 +319,6 @@ export default function HomePage() {
         bootstrap();
     }, [router]);
 
-    // デバッグログ（必要なければ削除OK）
     useEffect(() => {
         if (users.length > 0) {
             console.log('users (state changed):', users);
@@ -358,10 +356,9 @@ export default function HomePage() {
         const description = newDescription.trim();
         if (description) payload.description = description;
 
-        const dateForApi = normalizeDateForApi(newDueLocal);
+        const dateForApi = newDueLocal && /^\d{4}-\d{2}-\d{2}$/.test(newDueLocal) ? newDueLocal : '';
         if (dateForApi) payload.due_date = dateForApi;
 
-        // users[0] 依存は脆いので存在チェック
         if (users[0]?.id) payload.contractor = users[0].id;
 
         const res = await fetch('/api/tasks', {
@@ -374,21 +371,20 @@ export default function HomePage() {
             body: JSON.stringify(payload)
         });
 
-        const data = await safeJson<{ task: Task; error?: string }>(res);
-        if (res.ok && (data as any)?.task) {
-            const { task } = data as any;
-            setTasks((prev) => [task as Task, ...prev]);
+        type CreateTaskResp = { task: Task; error?: string };
+        const data = await safeJson<CreateTaskResp>(res);
+        if (res.ok && data?.task) {
+            setTasks((prev) => [data.task, ...prev]);
             setNewTitle('');
             setNewDescription('');
             setNewDueLocal('');
             setNewStatus('open');
             setMsg('追加しました');
         } else {
-            setMsg(`追加に失敗: ${(data as any)?.error ?? 'unknown error'}`);
+            setMsg(`追加に失敗: ${data?.error ?? 'unknown error'}`);
         }
     }
 
-    /** ログアウト */
     async function logout() {
         const csrf = readCookie('csrf_token') ?? '';
         if (!csrf) {

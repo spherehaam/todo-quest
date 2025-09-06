@@ -68,16 +68,16 @@ function pillClass(): string {
 }
 
 /** fetch → JSON の共通化（JSON失敗にも強い） */
-async function safeJson<T = unknown>(res: Response): Promise<T | {}> {
+async function safeJson<T>(res: Response): Promise<T | null> {
     try {
         return (await res.json()) as T;
     } catch {
-        return {};
+        return null;
     }
 }
 
 /** JSON API ヘルパー（ok/errを呼び出し側でハンドリング） */
-async function fetchJson<T = unknown>(input: RequestInfo, init?: RequestInit) {
+async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<{ res: Response; data: T | null }> {
     const res = await fetch(input, init);
     const data = await safeJson<T>(res);
     return { res, data };
@@ -219,20 +219,21 @@ export default function BbsPage() {
                     router.replace('/');
                     return;
                 }
-                const data: Me = await meRes.json();
-                if (!data?.id) {
+                const meData = (await meRes.json()) as Me;
+                if (!meData?.id) {
                     console.warn('/api/me に id がありません。受注処理に必要です。');
                 }
-                setMe(data);
+                setMe(meData);
 
                 // 掲示板タスク
-                const { res: tRes, data: tData } = await fetchJson<{ tasks: Task[] }>('/api/tasks/bbs', {
+                type BbsResp = { tasks: Task[] };
+                const { res: tRes, data: tData } = await fetchJson<BbsResp>('/api/tasks/bbs', {
                     credentials: 'include',
                     signal: controller.signal as any
                 });
-                setTasks(tRes.ok ? (tData as any)?.tasks ?? [] : []);
-            } catch (e: any) {
-                if (e?.name !== 'AbortError') {
+                setTasks(tRes.ok ? (tData?.tasks ?? []) : []);
+            } catch (e: unknown) {
+                if ((e as { name?: string })?.name !== 'AbortError') {
                     console.error(e);
                     setTasks([]);
                 }
@@ -263,19 +264,21 @@ export default function BbsPage() {
         }
 
         // APIは YYYY-MM-DD を受ける前提。ISOに変換しない（TZずれ回避）
-        const payload: Record<string, unknown> = {
+        const payload = {
             owner_id: me.id,
             title: trimmedTitle,
             description: description.trim() || null,
             due_date: dueDate || null,
-            status: 'open',
+            status: 'open' as const,
             difficulty: Number.isFinite(difficulty) ? difficulty : 1,
             ...(reward === '' ? {} : { reward: Number(reward) })
         };
 
+        type CreateResp = { task: Task; error?: string };
+
         try {
             setBusy(true);
-            const { res, data } = await fetchJson<{ task: Task; error?: string }>('/api/tasks/bbs', {
+            const { res, data } = await fetchJson<CreateResp>('/api/tasks/bbs', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -285,8 +288,8 @@ export default function BbsPage() {
                 body: JSON.stringify(payload)
             });
 
-            if (res.ok && (data as any)?.task) {
-                setTasks((prev) => [(data as any).task as Task, ...prev]);
+            if (res.ok && data?.task) {
+                setTasks((prev) => [data.task, ...prev]);
                 setTitle('');
                 setDescription('');
                 setDueDate('');
@@ -294,10 +297,11 @@ export default function BbsPage() {
                 setReward('');
                 setOpen(false);
             } else {
-                alert((data as any)?.error ?? '作成に失敗しました');
+                const errMsg = data && 'error' in data && typeof data.error === 'string' ? data.error : '作成に失敗しました';
+                alert(errMsg);
             }
-        } catch (e: any) {
-            if (e?.name !== 'AbortError') {
+        } catch (e: unknown) {
+            if ((e as { name?: string })?.name !== 'AbortError') {
                 alert('通信エラーが発生しました');
             }
         } finally {
@@ -313,12 +317,11 @@ export default function BbsPage() {
         }
 
         // 楽観的更新
-        const prev = tasks;
+        const snapshot = tasks;
         setTasks((cur) =>
             cur.map((t) => (t.id === id ? { ...t, status: 'in_progress', contractor: me.id } : t))
         );
 
-        // ▼実API例：失敗時はロールバック
         try {
             const csrf = readCookie('csrf_token') ?? '';
             if (!csrf) throw new Error('CSRFトークンが見つかりません');
@@ -329,13 +332,13 @@ export default function BbsPage() {
                 credentials: 'include'
             });
             if (!res.ok) {
-                setTasks(prev); // ロールバック
+                setTasks(snapshot); // ロールバック
                 const msg = await res.text().catch(() => '');
                 alert(msg || '受注に失敗しました');
             }
-        } catch (e: any) {
-            if (e?.name !== 'AbortError') {
-                setTasks(prev); // ロールバック
+        } catch (e: unknown) {
+            if ((e as { name?: string })?.name !== 'AbortError') {
+                setTasks(snapshot); // ロールバック
                 alert('通信エラーが発生しました');
             }
         }
@@ -385,7 +388,7 @@ export default function BbsPage() {
                         </span>
                         <button
                             onClick={logout}
-                            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 shadow-sm transition hover:bg-gray-50 active:translate-y-px dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-750/50"
+                            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-800 shadow-sm transition hover:bg-gray-50 active:translate-y-px dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-750/50"
                             disabled={loading}
                         >
                             ログアウト
