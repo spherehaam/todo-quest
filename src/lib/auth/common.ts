@@ -5,54 +5,37 @@ import { NextResponse } from 'next/server';
 import { SignJWT, jwtVerify, JWTPayload } from 'jose';
 import crypto from 'crypto';
 
-/**
- * 環境が production かどうかの判定
- * - Cookie の secure オプションなどで利用
- */
+/** 本番判定（HTTPS 前提の挙動に関与） */
 const isProd = process.env.NODE_ENV === 'production';
 
 /**
- * Cookie の sameSite 設定
- * - 'lax': 同一サイト内の基本的な動作に安全
- * - 'none': クロスサイトで Cookie を送る場合に必要（HTTPS 必須）
+ * SameSite 設定
+ * - 'none' を使うなら Secure=true が必須（ブラウザが Set-Cookie を黙殺する）
+ * - デフォルトは lax（通常のフォーム/リンク遷移は送信されるが、クロスサイトはブロック）
  */
 const SAMESITE: 'lax' | 'none' = 'lax';
 
-/**
- * Cookie 名やトークン有効期限の定義
- */
-export const COOKIE_ACCESS = 'auth';        // アクセストークン
-export const COOKIE_REFRESH = 'refresh';    // リフレッシュトークン
-export const COOKIE_CSRF = 'csrf_token';    // CSRF 用トークン
-export const ACCESS_TTL_SEC = 15 * 60;      // アクセストークン寿命 = 15分
-export const REFRESH_TTL_SEC = 7 * 24 * 60 * 60; // リフレッシュトークン寿命 = 7日
+export const COOKIE_ACCESS = 'auth';
+export const COOKIE_REFRESH = 'refresh';
+export const COOKIE_CSRF = 'csrf_token';
 
-/**
- * JWT 秘密鍵を取得
- * - 環境変数 JWT_SECRET を使用
- */
+/** 有効期限（秒） */
+export const ACCESS_TTL_SEC = 15 * 60; // 15 minutes
+export const REFRESH_TTL_SEC = 7 * 24 * 60 * 60; // 7 days
+
+/** JWT 秘密鍵を取得（未設定は起動時エラーに） */
 function getSecret() {
     const s = process.env.JWT_SECRET;
-    if (!s) {
-        throw new Error('JWT_SECRET is not set');
-    }
-
+    if (!s) throw new Error('JWT_SECRET is not set');
     return new TextEncoder().encode(s);
 }
 
-/**
- * 任意の文字列を SHA256 でハッシュ化
- * - セッションIDやリフレッシュトークンの DB 保管時に利用想定
- */
+/** 任意トークンをDB等で持つ場合のハッシュ化（可逆でない） */
 export function hashToken(value: string) {
     return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-/**
- * アクセストークン生成
- * - 有効期限: 15分
- * - typ = access
- */
+/** アクセストークン発行（短命） */
 export async function signAccessToken(user: { id: string; email: string }) {
     return await new SignJWT({ sub: user.id, email: user.email, typ: 'access' })
         .setProtectedHeader({ alg: 'HS256' })
@@ -61,11 +44,7 @@ export async function signAccessToken(user: { id: string; email: string }) {
         .sign(getSecret());
 }
 
-/**
- * リフレッシュトークン生成
- * - 有効期限: 7日
- * - typ = refresh, jti = セッションID
- */
+/** リフレッシュトークン発行（長命・セッションIDを持たせる） */
 export async function signRefreshToken(
     user: { id: string; email: string },
     sessionId: string
@@ -82,106 +61,117 @@ export async function signRefreshToken(
         .sign(getSecret());
 }
 
-/**
- * アクセストークンを検証
- * - typ が "access" であることを確認
- */
+/** アクセストークン検証（タイプ/期限/署名） */
 export async function verifyAccess(token: string) {
     const { payload } = await jwtVerify(token, getSecret(), {
         algorithms: ['HS256'],
+        clockTolerance: '5s', // サーバ間のわずかな時計ズレを吸収
     });
-
-    if (payload.typ !== 'access') {
-        throw new Error('wrong token type');
-    }
-
+    if (payload.typ !== 'access') throw new Error('wrong token type');
     return payload as JWTPayload & { email: string };
 }
 
-/**
- * リフレッシュトークンを検証
- * - typ が "refresh" であることを確認
- */
+/** リフレッシュトークン検証 */
 export async function verifyRefresh(token: string) {
     const { payload } = await jwtVerify(token, getSecret(), {
         algorithms: ['HS256'],
+        clockTolerance: '5s',
     });
-    if (payload.typ !== 'refresh') {
-        throw new Error('wrong token type');
-    }
-
+    if (payload.typ !== 'refresh') throw new Error('wrong token type');
     return payload as JWTPayload & { email: string; jti: string };
 }
 
+/** timing-safe な比較（長さが違えば false） */
+function safeEqual(a: string, b: string): boolean {
+    const ab = Buffer.from(a);
+    const bb = Buffer.from(b);
+    if (ab.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ab, bb);
+}
+
 /**
- * CSRF トークン検証（ダブルサブミットクッキー方式）
- * - Cookie に保存された csrf_token
- * - リクエストヘッダーの X-CSRF-Token
- * 両方を比較し、一致しなければエラー
+ * CSRF 検証
+ * - Double Submit Cookie（Cookie とヘッダの一致）
+ * - かつ Origin/Referer が同一オリジンなら OK（ヘッダが存在する場合のみ検査）
  */
 export async function requireCsrf() {
     const c = await cookies();
     const h = await headers();
+
     const csrfCookie = c.get(COOKIE_CSRF)?.value ?? '';
     const csrfHeader = h.get('X-CSRF-Token') ?? '';
-    if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) {
+
+    // Double Submit 一致
+    if (!csrfCookie || !csrfHeader || !safeEqual(csrfCookie, csrfHeader)) {
+        throw new Error('csrf_mismatch');
+    }
+
+    // 追加防御: Origin/Referer が存在する場合は必ず同一オリジン
+    const origin = h.get('Origin') ?? '';
+    const referer = h.get('Referer') ?? '';
+    const host = h.get('Host') ?? '';
+    const expectedSuffix = `://${host}`;
+
+    const sameOrigin =
+        (!origin || origin.endsWith(expectedSuffix)) &&
+        (!referer || referer.includes(`://${host}/`));
+
+    if (!sameOrigin) {
         throw new Error('csrf_mismatch');
     }
 }
 
-/**
- * Cookie セット用ラッパー（NextResponse 想定）
- * - 各種トークンをレスポンスにセット
- */
+/** アクセストークンを HttpOnly Cookie に保存 */
 export function setAccessCookie(res: NextResponse, token: string) {
+    const secure = isProd || SAMESITE === 'none';
     res.cookies.set(COOKIE_ACCESS, token, {
         httpOnly: true,
-        secure: isProd,
+        secure,
         sameSite: SAMESITE,
         path: '/',
         maxAge: ACCESS_TTL_SEC,
     });
 }
 
+/** リフレッシュトークンを HttpOnly Cookie に保存 */
 export function setRefreshCookie(res: NextResponse, token: string) {
+    const secure = isProd || SAMESITE === 'none';
     res.cookies.set(COOKIE_REFRESH, token, {
         httpOnly: true,
-        secure: isProd,
+        secure,
         sameSite: SAMESITE,
         path: '/',
         maxAge: REFRESH_TTL_SEC,
     });
 }
 
+/** フロントから読める CSRF Cookie を設定 */
 export function setCsrfCookie(res: NextResponse, value: string) {
+    const secure = isProd || SAMESITE === 'none';
     res.cookies.set(COOKIE_CSRF, value, {
-        httpOnly: false, // JSから参照可能にして二重送信チェックに利用
-        secure: isProd,
+        httpOnly: false, // フロントJSから読み出す想定（Double Submit 用）
+        secure,
         sameSite: SAMESITE,
         path: '/',
         maxAge: REFRESH_TTL_SEC,
     });
 }
 
-/**
- * Cookie 読み取りユーティリティ
- */
+/** Cookie からアクセストークン読取（存在しなければ空文字） */
 export async function readAccessTokenFromCookie() {
     const c = await cookies();
     return c.get(COOKIE_ACCESS)?.value ?? '';
 }
 
+/** Cookie からリフレッシュトークン読取（存在しなければ空文字） */
 export async function readRefreshTokenFromCookie() {
     const c = await cookies();
     return c.get(COOKIE_REFRESH)?.value ?? '';
 }
 
-/**
- * 認証関連 Cookie をすべて削除
- * - ログアウト時などに利用
- */
+/** 全認証系 Cookie を削除 */
 export function clearAllAuthCookies(res: NextResponse) {
-    res.cookies.set(COOKIE_ACCESS, '', { path: '/', maxAge: 0 });
-    res.cookies.set(COOKIE_REFRESH, '', { path: '/', maxAge: 0 });
-    res.cookies.set(COOKIE_CSRF, '', { path: '/', maxAge: 0 });
+    res.cookies.delete(COOKIE_ACCESS);
+    res.cookies.delete(COOKIE_REFRESH);
+    res.cookies.delete(COOKIE_CSRF);
 }

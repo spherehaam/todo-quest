@@ -171,44 +171,63 @@ export default function BbsPage() {
     );
 
     /**
-     * 初期化フロー
-     * - `/api/me` でログインユーザーを取得（失敗時はトップへ）
-     * - `/api/tasks/bbs` で掲示板タスクを取得
-     * - いずれも AbortController でクリーンアップ
+     * 初期化処理
+     * - `/api/me` でログインユーザー情報を取得（失敗時はトップへリダイレクト）
+     * - `/api/tasks/bbs` で掲示板タスク一覧を取得
+     * - useEffect クリーンアップ時は AbortController で fetch を中断
      */
     useEffect(() => {
         const ac = new AbortController();
+
+        // fetch をラップして、AbortError は正常終了として無視する
+        async function safeFetch(input: RequestInfo | URL, init?: RequestInit) {
+            try {
+                return await fetch(input, { ...init, signal: ac.signal });
+            } catch (e) {
+                if (e instanceof DOMException && e.name === 'AbortError') return null;
+                if (typeof e === 'string' && e === 'component_unmounted') return null;
+                if (typeof e === 'object' && e && 'message' in e && (e as any).message === 'component_unmounted') return null;
+                throw e;
+            }
+        }
+
         async function bootstrap() {
             try {
-                const res = await fetch('/api/me', { credentials: 'include', signal: ac.signal });
+                // ログインユーザー取得
+                const res = await safeFetch('/api/me', { credentials: 'include' });
+                if (!res) return;
                 if (!res.ok) {
                     router.push('/');
                     return;
                 }
-                const data: Me = await res.json();
-                if (!data?.id) {
-                    console.warn('/api/me に id がありません。受注処理に必要です。');
-                }
-                setMe(data);
+                const me: Me = await res.json();
+                setMe(me);
 
-                try {
-                    const tRes = await fetch('/api/tasks/bbs', { credentials: 'include', signal: ac.signal });
-                    if (tRes.ok) {
-                        const json = await tRes.json();
-                        setTasks(json.tasks ?? []);
-                    } else {
-                        setTasks([]);
-                    }
-                } catch {
+                // 掲示板タスク取得
+                const tRes = await safeFetch('/api/tasks/bbs', { credentials: 'include' });
+                if (!tRes) return;
+                if (tRes.ok) {
+                    const json = await tRes.json();
+                    setTasks(json.tasks ?? []);
+                } else {
                     setTasks([]);
                 }
+            } catch (e) {
+                console.error('[bbs] bootstrap failed:', e); // ネットワーク等の本当の失敗だけを記録
+                setTasks([]);
             } finally {
                 setLoading(false);
             }
         }
+
         bootstrap();
-        return () => ac.abort();
+
+        return () => {
+            // アンマウント時に fetch を中断
+            ac.abort('component_unmounted');
+        };
     }, [router]);
+
 
     /**
      * 新規タスクの作成（モーダルから送信）
