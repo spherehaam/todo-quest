@@ -334,14 +334,6 @@ export default function HomePage() {
         bootstrap();
     }, [router]);
 
-    useEffect(() => {
-        // デバッグログ（必要なければ削除OK）
-        if (users.length > 0) {
-            console.log('users (state changed):', users);
-            console.log('users[0].id:', users[0].id);
-        }
-    }, [users]);
-
     /** 新規タスク追加（最小バリデーション＋CSRF付与） */
     const addTask = useCallback(async () => {
         const title = newTitle.trim();

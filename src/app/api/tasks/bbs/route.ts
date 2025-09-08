@@ -4,7 +4,6 @@ import { handleGetTasksBbs } from '@/lib/api/tasks';
 import { handlePostTasksBbs } from '@/lib/api/tasks';
 
 export async function GET() {
-    console.log('handleGetTasksBbs');
     return handleGetTasksBbs();
 }
 

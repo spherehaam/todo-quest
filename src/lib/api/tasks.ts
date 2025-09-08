@@ -144,8 +144,6 @@ export async function handleGetTasks(req: Request) {
 }
 
 export async function handlePostTasks(req: Request) {
-    // 開発時だけ残したいログなら NODE_ENV を見る
-    // if (process.env.NODE_ENV === 'development') console.log('handlePostTasks');
     try {
         const token = await readAccessTokenFromCookie();
         if (!token) {
