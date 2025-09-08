@@ -74,8 +74,18 @@ export default function Page() {
             });
 
             // サーバーメッセージが常に JSON と限らないため try/catch
-            let data: any = {};
-            try { data = await res.json(); } catch { /* noop */ }
+            type LoginResponse = {
+                email?: string;
+                error?: string;
+            };
+
+            // any 撤去。unknown→narrow でも可だが、ここでは期待スキーマに型付け
+            let data: LoginResponse = {};
+            try {
+                data = (await res.json()) as LoginResponse;
+            } catch {
+                // JSONでない応答もあり得るので無視（例：テキスト/空レス）
+            }
 
             if (res.ok) {
                 setMsg(`OK: ${data?.email ?? emailTrimmed}`);
