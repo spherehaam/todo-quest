@@ -7,18 +7,21 @@ import { useRouter } from 'next/navigation';
 type Task = {
     id: string;
     title: string;
-    description?: string | null;
-    due_date?: string | null;
-    status: 'open' | 'in_progress' | 'done';
+    description?: string;
+    due_date?: string;
+    status: TaskStatus;
     created_at: string;
-    contractor: string;
+    contractor?: string;
 };
+
+// 追加：作成時に送るための型
+type NewTaskPayload = Omit<Task, 'id' | 'created_at'>;
 
 type Users = {
     id: string;
-    username: string;
-    level: number;
-    exp: number;
+    username?: string;
+    level?: number;
+    exp?: number;
 };
 
 /** クッキーから値を取得 */
@@ -295,15 +298,16 @@ export default function HomePage() {
             }
         }
 
-        async function fetchUsers(): Promise<Array<{ id: string }>> {
+        async function fetchUsers(): Promise<Users[]> {
             const res = await fetch('/api/users', { credentials: 'include' });
             if (!res.ok) {
                 setUsers([]);
                 return [];
             }
             const data = await res.json();
-            setUsers(data.users ?? []);
-            return data.users ?? [];
+            const list: Users[] = data.users ?? [];
+            setUsers(list);
+            return list;
         }
 
         bootstrap();
@@ -318,6 +322,7 @@ export default function HomePage() {
     }, [users]);
 
     /** タスク追加 */
+    // 置き換え 3: addTask() 内の payload 作成ロジック（any を使わない）
     async function addTask() {
         const title = newTitle.trim();
         if (!title) {
@@ -326,24 +331,26 @@ export default function HomePage() {
         }
 
         const csrf = readCookie('csrf_token') ?? '';
-        const payload: Record<string, unknown> = {
+
+        const payload: NewTaskPayload = {
             title,
-            status: newStatus
+            status: newStatus,
         };
 
         const description = newDescription.trim();
         if (description) {
-            (payload as any).description = description;
+            payload.description = description;
         }
 
         if (newDueLocal) {
             const d = new Date(newDueLocal);
             if (!isNaN(d.getTime())) {
-                (payload as any).due_date = d.toISOString();
+                payload.due_date = d.toISOString();
             }
         }
-
-        (payload as any).contractor = users[0]?.id;
+        if (users[0]?.id) {
+            payload.contractor = users[0].id;
+        }
 
         const res = await fetch('/api/tasks', {
             method: 'POST',
