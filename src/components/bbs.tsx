@@ -172,36 +172,35 @@ export default function BbsPage() {
 
     /**
      * 初期化処理
-     * - `/api/me` でログインユーザー情報を取得（失敗時はトップへリダイレクト）
-     * - `/api/tasks/bbs` で掲示板タスク一覧を取得
-     * - useEffect クリーンアップ時は AbortController で fetch を中断
+     * - `/api/me` でログインユーザーを取得（失敗時はトップへリダイレクト）
+     * - `/api/tasks/bbs` で掲示板タスクを取得
+     * - クリーンアップ時は AbortController で fetch を中断
      */
     useEffect(() => {
         const ac = new AbortController();
 
+        /**
+         * Abort によるキャンセルかどうか判定するユーティリティ
+         */
         function isAbortError(value: unknown): boolean {
-            // DOMException: name が AbortError
             if (value instanceof DOMException && value.name === 'AbortError') return true;
-
-            // fetch polyfill 等: 理由文字列で "component_unmounted" を渡すケース
             if (typeof value === 'string') return value === 'component_unmounted';
-
-            // Error/例外オブジェクトに message がある場合
             if (typeof value === 'object' && value !== null && 'message' in value) {
                 const m = (value as { message?: unknown }).message;
                 return typeof m === 'string' && m === 'component_unmounted';
             }
-                return false;
-            }
+            return false;
+        }
 
+        /**
+         * fetch をラップして、中断は正常終了扱いにする
+         */
         async function safeFetch(input: RequestInfo | URL, init?: RequestInit) {
             try {
                 return await fetch(input, { ...init, signal: ac.signal });
             } catch (e: unknown) {
-                // Abort は正常なキャンセルとして無視（ログ出さない）
-                if (isAbortError(e)) return null;
-                // それ以外は本当の失敗としてスロー
-                throw e;
+                if (isAbortError(e)) return null; // 中断は無視
+                throw e; // 本当の失敗だけスロー
             }
         }
 
