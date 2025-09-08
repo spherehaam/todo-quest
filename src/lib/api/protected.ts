@@ -4,36 +4,52 @@ import { NextResponse } from 'next/server';
 import { readAccessTokenFromCookie, verifyAccess, requireCsrf } from '@/lib/auth/common';
 
 /**
- * /api/protected の POST ハンドラー
- * - アクセストークン（JWT）を Cookie から取得し検証
- * - CSRF トークンを検証
- * - 認証 & CSRF が通れば保護されたリソースを返す
+ * 保護API（POST）
+ * - 認証クッキーからアクセストークンを取得 → 検証
+ * - CSRFトークン検証（ヘッダ 'X-CSRF-Token' を想定）
+ * - 成功時: { ok: true, data: 'secret' }
+ * - 失敗時: 'csrf_mismatch' は 403、それ以外は 401
+ * - センシティブな応答につき Cache-Control: no-store を明示
  */
-export async function handlePostProtected() {
+export async function handlePostProtected(): Promise<NextResponse> {
+    // すべてのレスポンスに付与する共通ヘッダ
+    const noStoreHeaders = { 'Cache-Control': 'no-store' as const };
+
     try {
-        // 1) 認可（JWT）の検証
+        // 1) 認証トークン
         const token = await readAccessTokenFromCookie();
         if (!token) {
             return NextResponse.json(
-                { ok: false, error: 'no_auth' },
-                { status: 401 }
+                { ok: false, error: 'no_auth' as const },
+                { status: 401, headers: noStoreHeaders }
             );
         }
+
+        // 2) アクセストークン検証（失効・改ざん時は例外）
         await verifyAccess(token);
 
-        // 2) CSRF 検証
+        // 3) CSRF 検証（不一致時は 'csrf_mismatch' を投げる想定）
         await requireCsrf();
 
-        // 3) 本来の保護処理（ここでは固定文字列を返却）
-        return NextResponse.json({ ok: true, data: 'secret' });
-    } catch (e) {
-        // CSRF mismatch とそれ以外でステータスを分ける
-        const msg =
-            (e as Error).message === 'csrf_mismatch'
-                ? 'csrf_mismatch'
-                : 'unauthorized';
-        const status = msg === 'csrf_mismatch' ? 403 : 401;
+        // 4) 成功レスポンス
+        return NextResponse.json(
+            { ok: true, data: 'secret' as const },
+            { status: 200, headers: noStoreHeaders }
+        );
+    } catch (err) {
+        // 例外から安全に message を抽出（非 Error オブジェクトにも耐性）
+        const message =
+            typeof err === 'object' && err !== null && 'message' in err
+                ? String((err as { message?: unknown }).message)
+                : '';
 
-        return NextResponse.json({ ok: false, error: msg }, { status });
+        const isCsrfMismatch = message === 'csrf_mismatch';
+        const status = isCsrfMismatch ? 403 : 401;
+        const code = (isCsrfMismatch ? 'csrf_mismatch' : 'unauthorized');
+
+        return NextResponse.json(
+            { ok: false, error: code },
+            { status, headers: noStoreHeaders }
+        );
     }
 }
