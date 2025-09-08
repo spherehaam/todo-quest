@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
+/** タスクの型定義 */
 type Task = {
     id: string;
     title: string;
@@ -20,10 +21,7 @@ type Users = {
     exp: number;
 };
 
-// ------------------------------
-// ユーティリティ
-// ------------------------------
-
+/** クッキーから値を取得 */
 function readCookie(name: string) {
     return document.cookie
         .split('; ')
@@ -31,6 +29,7 @@ function readCookie(name: string) {
         ?.split('=')[1];
 }
 
+/** 日時文字列の整形（ISO/任意→ローカル表示）。不正値は "-" 表示 */
 function fmtDate(input?: string | null): string {
     if (!input) {
         return '-';
@@ -42,6 +41,7 @@ function fmtDate(input?: string | null): string {
     return d.toLocaleString();
 }
 
+/** 日付のみの整形（不正値は "-"） */
 function fmtDateOnly(input?: string | null): string {
     if (!input) {
         return '-';
@@ -53,6 +53,7 @@ function fmtDateOnly(input?: string | null): string {
     return d.toLocaleDateString();
 }
 
+/** ===== ステータス編集用 追加分（既存に影響しない形で定義） ===== */
 type TaskStatus = 'open' | 'in_progress' | 'done';
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -63,26 +64,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 
 const ALL_STATUSES: TaskStatus[] = ['open', 'in_progress', 'done'];
 
-/** fetch → JSON の共通化（JSON失敗にも強い） */
-async function safeJson<T>(res: Response): Promise<T | null> {
-    try {
-        return (await res.json()) as T;
-    } catch {
-        return null;
-    }
-}
-
-/** JSON API ヘルパー */
-async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<{ res: Response; data: T | null }> {
-    const res = await fetch(input, init);
-    const data = await safeJson<T>(res);
-    return { res, data };
-}
-
-// ------------------------------
-// ステータスセル
-// ------------------------------
-
+/** ステータス更新API（/api/tasks/[id]/status に PATCH を想定） */
 async function updateTaskStatus(taskId: string, next: TaskStatus) {
     const res = await fetch(`/api/tasks/status`, {
         method: 'PATCH',
@@ -97,10 +79,11 @@ async function updateTaskStatus(taskId: string, next: TaskStatus) {
         const msg = await res.text().catch(() => '');
         throw new Error(msg || `Failed to update status (${res.status})`);
     }
-    const json = await res.json().catch(() => (null));
-    return json as { status: TaskStatus } | null;
+    const json = await res.json().catch(() => ({}));
+    return json as { status: TaskStatus };
 }
 
+/** ステータスセル（クリックでセレクトに切替 → 楽観的更新） */
 function StatusCell(props: {
     taskId: string;
     value: TaskStatus;
@@ -125,12 +108,12 @@ function StatusCell(props: {
             return;
         }
         const prev = value;
-        onLocalChange(next);
+        onLocalChange(next); // 楽観的更新
         setSaving(true);
         try {
             await updateTaskStatus(taskId, next);
         } catch (err) {
-            onRevert(prev);
+            onRevert(prev); // 失敗時ロールバック
             console.error(err);
             alert('ステータスの更新に失敗しました。');
         } finally {
@@ -172,10 +155,11 @@ function StatusCell(props: {
         </select>
     );
 }
+/** ===== ここまで既存 ===== */
 
-// ------------------------------
-// スケルトン
-// ------------------------------
+/** ===== スケルトン & シマー ===== */
+
+/** 上部に表示するシマー進捗バー（ロード中のみ） */
 function ShimmerBar() {
     return (
         <div className="h-1 w-full overflow-hidden rounded-full bg-gradient-to-r from-indigo-100 via-blue-100 to-indigo-100 dark:from-indigo-900/40 dark:via-blue-900/40 dark:to-indigo-900/40">
@@ -190,6 +174,7 @@ function ShimmerBar() {
     );
 }
 
+/** サイドバーのスケルトン */
 function SkeletonSidebar() {
     return (
         <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
@@ -205,6 +190,7 @@ function SkeletonSidebar() {
     );
 }
 
+/** 入力フォームのスケルトン */
 function SkeletonForm() {
     return (
         <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
@@ -220,6 +206,7 @@ function SkeletonForm() {
     );
 }
 
+/** タスクテーブルのスケルトン */
 function SkeletonTable() {
     return (
         <section className="rounded-2xl border border-gray-200 bg-white p-0 dark:border-gray-800 dark:bg-gray-900">
@@ -254,9 +241,8 @@ function SkeletonTable() {
     );
 }
 
-// ------------------------------
-// 画面本体
-// ------------------------------
+/** ===== ここまでスケルトン ===== */
+
 export default function HomePage() {
     const [email, setEmail] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
@@ -264,61 +250,66 @@ export default function HomePage() {
 
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
-    const [newDueLocal, setNewDueLocal] = useState(''); // YYYY-MM-DD
-    const [newStatus, setNewStatus] = useState<TaskStatus>('open');
+    const [newDueLocal, setNewDueLocal] = useState('');
+    const [newStatus, setNewStatus] = useState<'open' | 'in_progress' | 'done'>('open');
 
     const [msg, setMsg] = useState('');
     const [users, setUsers] = useState<Users[]>([]);
     const router = useRouter();
 
-    // 進行中のリクエスト中断用
-    const abortRef = useRef<AbortController | null>(null);
-    useEffect(() => {
-        return () => abortRef.current?.abort();
-    }, []);
-
-    // 初期ロード
     useEffect(() => {
         async function bootstrap() {
-            setLoading(true);
             try {
-                abortRef.current?.abort();
-                const controller = new AbortController();
-                abortRef.current = controller;
-
-                // 認証確認
-                const meRes = await fetch('/api/me', { credentials: 'include', signal: controller.signal });
+                // 1) 認証確認
+                const meRes = await fetch('/api/me', { credentials: 'include' });
                 if (!meRes.ok) {
-                    router.replace('/'); // 未ログイン→ログイン画面へ
+                    router.push('/');
                     return;
                 }
-                const me = await meRes.json() as { email?: string | null };
-                setEmail(me.email ?? null);
+                const me = await meRes.json();
+                setEmail(me.email);
 
-                // ユーザー一覧
-                type UsersResp = { users: Users[] };
-                const uRes = await fetchJson<UsersResp>('/api/users', { credentials: 'include', signal: controller.signal as any });
-                const list = uRes.res.ok ? (uRes.data?.users ?? []) : [];
-                setUsers(list);
+                // 2) ユーザー取得（配列を返す）
+                const usersFetched = await fetchUsers();
 
-                // とりあえず先頭ユーザーでタスク取得（※本来は選択UIが望ましい）
-                const contractor = list[0]?.id;
-                const url = contractor ? `/api/tasks?contractor=${encodeURIComponent(contractor)}` : '/api/tasks';
-                type TasksResp = { tasks: Task[] };
-                const tRes = await fetchJson<TasksResp>(url, { credentials: 'include', signal: controller.signal as any });
-                setTasks(tRes.res.ok ? (tRes.data?.tasks ?? []) : []);
-            } catch (e: unknown) {
-                if ((e as { name?: string })?.name !== 'AbortError') {
-                    console.error(e);
-                    setMsg('初期読み込みに失敗しました。');
+                // 3) タスク一覧取得
+                if (usersFetched.length > 0) {
+                    await fetchTasks(usersFetched[0].id);
                 }
             } finally {
                 setLoading(false);
             }
         }
+
+        async function fetchTasks(contractor?: string) {
+            const url = contractor
+                ? `/api/tasks?contractor=${encodeURIComponent(contractor)}`
+                : `/api/tasks`;
+
+            const res = await fetch(url, { credentials: 'include' });
+            if (res.ok) {
+                const data = await res.json();
+                setTasks(data.tasks ?? []);
+            } else {
+                setTasks([]);
+            }
+        }
+
+        async function fetchUsers(): Promise<Array<{ id: string }>> {
+            const res = await fetch('/api/users', { credentials: 'include' });
+            if (!res.ok) {
+                setUsers([]);
+                return [];
+            }
+            const data = await res.json();
+            setUsers(data.users ?? []);
+            return data.users ?? [];
+        }
+
         bootstrap();
     }, [router]);
 
+    // 状態が更新された「後」の users を見たい場合は、別の useEffect でログ
     useEffect(() => {
         if (users.length > 0) {
             console.log('users (state changed):', users);
@@ -326,15 +317,7 @@ export default function HomePage() {
         }
     }, [users]);
 
-    /** 新規タスク作成 */
-    type NewTaskPayload = {
-        title: string;
-        description?: string;
-        due_date?: string;     // YYYY-MM-DD を推奨
-        status: TaskStatus;
-        contractor?: string;   // 受注者
-    };
-
+    /** タスク追加 */
     async function addTask() {
         const title = newTitle.trim();
         if (!title) {
@@ -343,23 +326,24 @@ export default function HomePage() {
         }
 
         const csrf = readCookie('csrf_token') ?? '';
-        if (!csrf) {
-            setMsg('CSRFトークンが見つかりません。ログインし直してください。');
-            return;
-        }
-
-        const payload: NewTaskPayload = {
+        const payload: Record<string, unknown> = {
             title,
             status: newStatus
         };
 
         const description = newDescription.trim();
-        if (description) payload.description = description;
+        if (description) {
+            (payload as any).description = description;
+        }
 
-        const dateForApi = newDueLocal && /^\d{4}-\d{2}-\d{2}$/.test(newDueLocal) ? newDueLocal : '';
-        if (dateForApi) payload.due_date = dateForApi;
+        if (newDueLocal) {
+            const d = new Date(newDueLocal);
+            if (!isNaN(d.getTime())) {
+                (payload as any).due_date = d.toISOString();
+            }
+        }
 
-        if (users[0]?.id) payload.contractor = users[0].id;
+        (payload as any).contractor = users[0]?.id;
 
         const res = await fetch('/api/tasks', {
             method: 'POST',
@@ -371,54 +355,53 @@ export default function HomePage() {
             body: JSON.stringify(payload)
         });
 
-        type CreateTaskResp = { task: Task; error?: string };
-        const data = await safeJson<CreateTaskResp>(res);
-        if (res.ok && data?.task) {
-            setTasks((prev) => [data.task, ...prev]);
+        const data = await res.json();
+        if (res.ok) {
+            setTasks((prev) => [data.task as Task, ...prev]);
             setNewTitle('');
             setNewDescription('');
             setNewDueLocal('');
             setNewStatus('open');
             setMsg('追加しました');
         } else {
-            setMsg(`追加に失敗: ${data?.error ?? 'unknown error'}`);
+            setMsg(`追加に失敗: ${data.error ?? 'unknown error'}`);
         }
     }
 
+    /** ログアウト */
     async function logout() {
         const csrf = readCookie('csrf_token') ?? '';
-        if (!csrf) {
-            setMsg('CSRFトークンが見つかりません。');
-            return;
-        }
-        try {
-            await fetch('/api/logout', {
-                method: 'POST',
-                headers: { 'X-CSRF-Token': csrf },
-                credentials: 'include'
-            });
-        } finally {
-            router.push('/');
-        }
+        await fetch('/api/logout', {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': csrf },
+            credentials: 'include'
+        });
+        router.push('/');
     }
 
     return (
         <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+            {/* ===== ヘッダー ===== */}
             <header className="sticky top-0 z-30 border-b border-gray-200/70 bg-white/80 backdrop-blur dark:border-gray-800 dark:bg-gray-900/70">
                 <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
+                    {/* ロゴ / ブランド */}
                     <div className="flex items-center gap-2">
                         <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600" />
-                        <span className="text-sm font-semibold tracking-wide">TodoQuest</span>
+                        <span className="text-sm font-semibold tracking-wide">
+                            TodoQuest
+                        </span>
                     </div>
 
-                    {/* レベル表示：exp/exp は同値になっていたので、必要に応じて maxExp を導入してください */}
-                    {/* <div className="flex items-center gap-2" aria-label="ユーザー情報">
+                    {/* ユーザー */}
+                    {/* <div className="flex items-center gap-2">
                         レベル
-                        {users.map((u) => (
-                            <p key={u.id}> {u.level}　経験値 {u.exp}</p>
+                        {users.map((u, idx) => (
+                            <p key={u.id}>{u.level}　　経験値 {u.exp} / {u.exp}</p>
+                            // <div key={u.id}>{u.id} : {u.username} : {u.level} : {u.exp} : {idx}</div>
                         ))}
                     </div> */}
 
+                    {/* ログアウト */}
                     <div className="flex items-center gap-3">
                         <span className="hidden text-xs text-gray-500 dark:text-gray-400 sm:inline">
                             {loading ? 'Loading…' : (email ?? 'Guest')}
@@ -432,28 +415,30 @@ export default function HomePage() {
                         </button>
                     </div>
                 </div>
-                {loading && (
-                    <div className="px-4">
-                        <div className="mx-auto max-w-6xl py-1">
-                            <ShimmerBar />
-                        </div>
-                    </div>
-                )}
+                {loading && <div className="px-4"><div className="mx-auto max-w-6xl py-1"><ShimmerBar /></div></div>}
             </header>
 
+            {/* ===== シェル（サイドバー + メイン） ===== */}
             <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 p-4 sm:grid-cols-[220px_minmax(0,1fr)]">
+                {/* ===== サイドバー ===== */}
                 {loading ? (
                     <SkeletonSidebar />
                 ) : (
                     <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
-                        <nav className="space-y-1" aria-label="サイドバー">
+                        <nav className="space-y-1">
                             <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
                                 メニュー
                             </div>
-                            <a href="/home" className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
+                            <a
+                                href="/home"
+                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                            >
                                 <span>📋</span> <span>ホーム</span>
                             </a>
-                            <a href="/bbs" className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
+                            <a
+                                href="/bbs"
+                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                            >
                                 <span>📋</span> <span>タスク掲示板</span>
                             </a>
                             <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
@@ -461,6 +446,7 @@ export default function HomePage() {
                     </aside>
                 )}
 
+                {/* ===== メインコンテンツ ===== */}
                 <main className="space-y-4" aria-busy={loading} aria-live="polite">
                     {loading ? (
                         <>
@@ -469,38 +455,36 @@ export default function HomePage() {
                         </>
                     ) : (
                         <>
-                            {/* タスク追加フォーム */}
+                            {/* 入力フォーム */}
                             <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
                                 <h1 className="mb-2 text-lg font-semibold">ようこそ、{email} さん</h1>
 
                                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
+                                    {/* 1行目 */}
                                     <input
                                         className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
                                         placeholder="タイトル"
                                         value={newTitle}
                                         onChange={(e) => setNewTitle(e.target.value)}
-                                        aria-label="タイトル"
                                     />
                                     <input
                                         className="sm:col-span-5 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
                                         placeholder="詳細（任意）"
                                         value={newDescription}
                                         onChange={(e) => setNewDescription(e.target.value)}
-                                        aria-label="詳細"
                                     />
                                     <input
                                         type="date"
                                         className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950 dark:[&::-webkit-calendar-picker-indicator]:invert"
                                         value={newDueLocal}
                                         onChange={(e) => setNewDueLocal(e.target.value)}
-                                        aria-label="期限"
                                     />
 
+                                    {/* 2行目 */}
                                     <select
                                         className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
                                         value={newStatus}
-                                        onChange={(e) => setNewStatus(e.target.value as TaskStatus)}
-                                        aria-label="ステータス"
+                                        onChange={(e) => setNewStatus(e.target.value as 'open' | 'in_progress' | 'done')}
                                     >
                                         <option value="open">未完了</option>
                                         <option value="in_progress">進行中</option>
@@ -517,7 +501,9 @@ export default function HomePage() {
                                     </button>
                                 </div>
 
-                                {msg && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{msg}</p>}
+                                {msg && (
+                                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{msg}</p>
+                                )}
                             </section>
 
                             {/* タスク一覧 */}
@@ -545,7 +531,10 @@ export default function HomePage() {
                                                 </tr>
                                             )}
                                             {tasks.map((t, idx) => (
-                                                <tr key={t.id} className={idx % 2 === 0 ? 'bg-white dark:bg-gray-900' : 'bg-gray-50 dark:bg-gray-950'}>
+                                                <tr
+                                                    key={t.id}
+                                                    className={idx % 2 === 0 ? 'bg-white dark:bg-gray-900' : 'bg-gray-50 dark:bg-gray-950'}
+                                                >
                                                     <td className="px-4 py-3">{t.title}</td>
                                                     <td className="px-4 py-3">{t.description ?? '-'}</td>
                                                     <td className="px-4 py-3">{fmtDateOnly(t.due_date)}</td>
@@ -554,10 +543,18 @@ export default function HomePage() {
                                                             taskId={t.id}
                                                             value={t.status}
                                                             onLocalChange={(next) => {
-                                                                setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: next } : x)));
+                                                                setTasks((prev) =>
+                                                                    prev.map((x) =>
+                                                                        x.id === t.id ? { ...x, status: next } : x
+                                                                    )
+                                                                );
                                                             }}
                                                             onRevert={(prevStatus) => {
-                                                                setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: prevStatus } : x)));
+                                                                setTasks((prev) =>
+                                                                    prev.map((x) =>
+                                                                        x.id === t.id ? { ...x, status: prevStatus } : x
+                                                                    )
+                                                                );
                                                             }}
                                                         />
                                                     </td>
