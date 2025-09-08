@@ -1,10 +1,13 @@
 'use client';
 
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
-/** タスクの型定義（DBスキーマ準拠） */
+/**
+ * タスクの型。
+ * - DBスキーマに準拠。未設定の可能性がある項目は `?` や `null` を許可。
+ */
 type Task = {
     id: string;
     owner_id: string;
@@ -18,31 +21,35 @@ type Task = {
     contractor: string | null;
 };
 
-/** /api/me の想定レスポンス */
+/** /api/me の戻り値 */
 type Me = {
     id: string;
     email: string;
 };
 
-/** クッキー取得（CSRF等） */
+/**
+ * クッキーを安全に読み取るヘルパー。
+ * - 値は decodeURIComponent して返却（URLエンコードを考慮）
+ */
 function readCookie(name: string) {
-    return document.cookie
+    const raw = document.cookie
         .split('; ')
         .find((row) => row.startsWith(name + '='))
         ?.split('=')[1];
+    return raw ? decodeURIComponent(raw) : undefined;
 }
 
-/** ステータス表示ラベル */
+/** ステータスの日本語ラベル化 */
 function labelOf(s: Task['status']): string {
     switch (s) {
-        case 'open':        return '募集中';
+        case 'open': return '募集中';
         case 'in_progress': return '対応中';
-        case 'done':        return '完了';
-        default:            return s;
+        case 'done': return '完了';
+        default: return s;
     }
 }
 
-/** ステータスごとのBadge色 */
+/** ステータスごとのバッジ用クラス */
 function badgeClass(s: Task['status']): string {
     switch (s) {
         case 'open':
@@ -54,12 +61,12 @@ function badgeClass(s: Task['status']): string {
     }
 }
 
-/** 小さめのPill */
+/** 小さなタグ用の共通クラス */
 function pillClass(): string {
     return 'rounded-full px-2 py-0.5 text-xs ring-1 ring-black/10 bg-white text-gray-700 dark:ring-white/10 dark:bg-white/5 dark:text-gray-200';
 }
 
-/** シマー背景（装飾用） */
+/** ヘッダー下に出すシマー（ローディング） */
 function ShimmerBar() {
     return (
         <div className="h-1 w-full overflow-hidden rounded-full bg-gradient-to-r from-indigo-100 via-blue-100 to-indigo-100 dark:from-indigo-900/40 dark:via-blue-900/40 dark:to-indigo-900/40">
@@ -74,7 +81,7 @@ function ShimmerBar() {
     );
 }
 
-/** スケルトン：行タイトル */
+/** 見出し行のスケルトン */
 function SkeletonHeaderRow() {
     return (
         <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -87,7 +94,7 @@ function SkeletonHeaderRow() {
     );
 }
 
-/** スケルトン：タスクカード */
+/** タスクリスト用カードのスケルトン */
 function SkeletonCard() {
     return (
         <li className="relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900/60">
@@ -116,7 +123,7 @@ function SkeletonCard() {
     );
 }
 
-/** スケルトン：サイドバー */
+/** サイドバーのスケルトン */
 function SkeletonSidebar() {
     return (
         <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
@@ -132,32 +139,48 @@ function SkeletonSidebar() {
     );
 }
 
+/**
+ * タスク掲示板ページ（クライアントコンポーネント）
+ * - 初回マウント時に /api/me と /api/tasks/bbs を取得
+ * - 「依頼を投稿」モーダルを開いて新規タスク作成
+ * - 「受注する」でタスクを楽観更新し、APIに反映（失敗時ロールバック）
+ */
 export default function BbsPage() {
     const router = useRouter();
 
+    // ---- グローバル状態 ----
     const [me, setMe] = useState<Me | null>(null);
     const [tasks, setTasks] = useState<Task[]>([]);
-    const [open, setOpen] = useState(false);
-    const [loading, setLoading] = useState(true); // ← 追加：ロード状態
+    const [open, setOpen] = useState(false);        // モーダル開閉
+    const [loading, setLoading] = useState(true);   // 初期ロードのローディング
 
-    // モーダルのフォーム
+    // ---- 投稿フォームの状態 ----
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
     const [dueDate, setDueDate] = useState('');
-    const [difficulty, setDifficulty] = useState<number>(1); // 1–5
-    const [reward, setReward] = useState<number | ''>('');   // >=0
+    const [difficulty, setDifficulty] = useState<number>(1);
+    const [reward, setReward] = useState<number | ''>(''); // 未入力は '' で表現
 
-    // 表示ルール：未受注かつ募集中
+    /**
+     * 表示対象のタスク（未受注・募集中のみ）
+     * - `tasks` が変わったときだけ再計算
+     */
     const visibleTasks = useMemo(
         () => tasks.filter((t) => t.status === 'open' && t.contractor === null),
         [tasks]
     );
 
-    // 認証 & 初期ロード
+    /**
+     * 初期化フロー
+     * - `/api/me` でログインユーザーを取得（失敗時はトップへ）
+     * - `/api/tasks/bbs` で掲示板タスクを取得
+     * - いずれも AbortController でクリーンアップ
+     */
     useEffect(() => {
+        const ac = new AbortController();
         async function bootstrap() {
             try {
-                const res = await fetch('/api/me', { credentials: 'include' });
+                const res = await fetch('/api/me', { credentials: 'include', signal: ac.signal });
                 if (!res.ok) {
                     router.push('/');
                     return;
@@ -169,7 +192,7 @@ export default function BbsPage() {
                 setMe(data);
 
                 try {
-                    const tRes = await fetch('/api/tasks/bbs', { credentials: 'include' });
+                    const tRes = await fetch('/api/tasks/bbs', { credentials: 'include', signal: ac.signal });
                     if (tRes.ok) {
                         const json = await tRes.json();
                         setTasks(json.tasks ?? []);
@@ -180,14 +203,20 @@ export default function BbsPage() {
                     setTasks([]);
                 }
             } finally {
-                setLoading(false); // 成否に関わらずロード終了
+                setLoading(false);
             }
         }
         bootstrap();
+        return () => ac.abort();
     }, [router]);
 
-    /** 依頼の追加（モーダルから作成） */
-    async function addTaskFromModal() {
+    /**
+     * 新規タスクの作成（モーダルから送信）
+     * - 必須: title、ユーザーID（me.id）
+     * - CSRFトークンは Cookie から取得しヘッダに付与
+     * - 成功時は先頭に挿入し、フォームをリセット
+     */
+    const addTaskFromModal = useCallback(async () => {
         const trimmedTitle = title.trim();
         if (!trimmedTitle) {
             alert('タイトルは必須です');
@@ -205,8 +234,8 @@ export default function BbsPage() {
             description: description.trim() || null,
             due_date: dueDate || null,
             status: 'open',
-            difficulty: Number.isFinite(difficulty) ? difficulty : 1,
-            ...(reward === '' ? {} : { reward: Number(reward) }),
+            difficulty,
+            ...(reward === '' ? {} : { reward: Math.max(0, Math.floor(Number(reward))) }),
         };
 
         try {
@@ -222,8 +251,7 @@ export default function BbsPage() {
 
             const data = await res.json();
             if (res.ok) {
-                setTasks((prev) => [data.task as Task, ...prev]);
-                // リセット
+                setTasks((prev) => [data.task as Task, ...prev]); // 先頭に挿入
                 setTitle('');
                 setDescription('');
                 setDueDate('');
@@ -236,34 +264,56 @@ export default function BbsPage() {
         } catch {
             alert('通信エラーが発生しました');
         }
-    }
+    }, [title, description, dueDate, difficulty, reward, me?.id]);
 
-    /** 受注（→ in_progress & contractor を自分に） */
-    async function acceptTask(id: string) {
-        if (!me?.id) {
+    /**
+     * タスク受注（楽観更新 → API → 失敗時ロールバック）
+     * - 先に UI を 'in_progress' + contractor=userId に更新
+     * - API 失敗時は 'open' + contractor=null に戻す
+     */
+    const acceptTask = useCallback(async (id: string) => {
+        const userId = me?.id;
+        if (!userId) {
             alert('ユーザー情報取得に失敗しました。再度ログインしてください。');
             return;
         }
-        // 楽観的更新
+
+        // 楽観更新
         setTasks((prev) =>
-            prev.map((t) =>
-                t.id === id ? { ...t, status: 'in_progress', contractor: me.id } : t
+            prev.map((t): Task =>
+                t.id === id ? { ...t, status: 'in_progress' as const, contractor: userId } : t
             )
         );
 
-        // ▼実API例（ロールバック処理は省略コメントのまま）
-        // try {
-        //     const csrf = readCookie('csrf_token') ?? '';
-        //     const res = await fetch(`/api/tasks/${id}/accept`, {
-        //         method: 'POST',
-        //         headers: { 'X-CSRF-Token': csrf },
-        //         credentials: 'include',
-        //     });
-        //     if (!res.ok) { /* ロールバック処理 */ }
-        // } catch { /* ロールバック処理 */ }
-    }
+        try {
+            const csrf = readCookie('csrf_token') ?? '';
+            const res = await fetch(`/api/tasks/${id}/accept`, {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': csrf },
+                credentials: 'include',
+            });
+            if (!res.ok) {
+                // 失敗時ロールバック
+                setTasks((prev) =>
+                    prev.map((t): Task =>
+                        t.id === id ? { ...t, status: 'open' as const, contractor: null } : t
+                    )
+                );
+                const err = await res.json().catch(() => ({}));
+                alert(err?.error ?? '受注に失敗しました');
+            }
+        } catch {
+            // 通信エラー時ロールバック
+            setTasks((prev) => prev.map((t) => t.id === id ? { ...t, status: 'open', contractor: null } : t));
+            alert('通信エラーが発生しました');
+        }
+    }, [me?.id]);
 
-    /** ログアウト */
+    /**
+     * ログアウト
+     * - CSRF ヘッダを付与して /api/logout へ POST
+     * - 完了したらトップへ
+     */
     async function logout() {
         const csrf = readCookie('csrf_token') ?? '';
         await fetch('/api/logout', {
@@ -274,15 +324,26 @@ export default function BbsPage() {
         router.push('/');
     }
 
-    // モーダルの初回フォーカス
+    // モーダル内の最初の input へフォーカス
     const firstInputRef = useRef<HTMLInputElement | null>(null);
     useEffect(() => {
         if (open) setTimeout(() => firstInputRef.current?.focus(), 0);
     }, [open]);
 
+    /**
+     * モーダル開閉に合わせて背景スクロールを禁止
+     * - iOS Safari 等でも効かせるため body.overflow を直接切り替え
+     */
+    useEffect(() => {
+        if (!open) return;
+        const original = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => { document.body.style.overflow = original; };
+    }, [open]);
+
     return (
         <div className="min-h-screen bg-gradient-to-b from-white to-gray-50 text-gray-900 dark:from-gray-950 dark:to-gray-900 dark:text-gray-100">
-            {/* ===== ヘッダー ===== */}
+            {/* ヘッダー */}
             <header className="sticky top-0 z-30 border-b border-gray-200/70 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/50 dark:border-gray-800 dark:bg-gray-900/60">
                 <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
                     <div className="flex items-center gap-2">
@@ -297,20 +358,20 @@ export default function BbsPage() {
                         </span>
                         <button
                             onClick={logout}
-                            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 shadow-sm transition hover:bg-gray-50 active:translate-y-px dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-750/50"
+                            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 shadow-sm transition hover:bg-gray-50 active:translate-y-px dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-800/50"
                             disabled={loading}
+                            aria-disabled={loading}
                         >
                             ログアウト
                         </button>
                     </div>
                 </div>
-                {/* 上部シマー進捗（ロード中のみ） */}
+                {/* ローディング中のみシマー表示 */}
                 {loading && <div className="px-4"><div className="mx-auto max-w-6xl py-1"><ShimmerBar /></div></div>}
             </header>
 
-            {/* ===== コンテンツ（サイドバー + メイン） ===== */}
             <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 p-4 sm:grid-cols-[220px_minmax(0,1fr)]">
-                {/* ===== サイドバー ===== */}
+                {/* サイドバー（ローディング時はスケルトン） */}
                 {loading ? (
                     <SkeletonSidebar />
                 ) : (
@@ -339,13 +400,13 @@ export default function BbsPage() {
                     </aside>
                 )}
 
-                {/* ===== メインコンテンツ ===== */}
+                {/* メイン */}
                 <main
                     className="space-y-4"
                     aria-busy={loading}
                     aria-live="polite"
                 >
-                    {/* タイトル行 */}
+                    {/* 見出し */}
                     {loading ? <SkeletonHeaderRow /> : (
                         <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                             <div>
@@ -363,7 +424,7 @@ export default function BbsPage() {
                         </div>
                     )}
 
-                    {/* 募集中一覧 */}
+                    {/* タスクリスト */}
                     <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900/60">
                         <div className="mb-3 flex items-center justify-between">
                             <h2 className="text-lg font-semibold tracking-tight">募集中のタスク</h2>
@@ -373,16 +434,19 @@ export default function BbsPage() {
                         </div>
 
                         {loading ? (
+                            // ローディング時はスケルトン表示
                             <ul className="flex list-none flex-col gap-3">
                                 <SkeletonCard />
                                 <SkeletonCard />
                                 <SkeletonCard />
                             </ul>
                         ) : visibleTasks.length === 0 ? (
+                            // 件数0のときの空表示
                             <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-400">
                                 募集中のタスクはありません。
                             </div>
                         ) : (
+                            // タスク一覧
                             <ul className="flex list-none flex-col gap-3">
                                 {visibleTasks.map((t) => (
                                     <li
@@ -436,6 +500,7 @@ export default function BbsPage() {
                                                     className="rounded-xl border border-indigo-600 bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:translate-y-px disabled:opacity-60 disabled:saturate-50"
                                                     onClick={() => acceptTask(t.id)}
                                                     disabled={!me?.id}
+                                                    aria-disabled={!me?.id}
                                                     title={!me?.id ? 'ユーザー情報取得中' : 'このタスクを受注する'}
                                                 >
                                                     受注する
@@ -450,7 +515,7 @@ export default function BbsPage() {
                 </main>
             </div>
 
-            {/* ===== モーダル（依頼作成） ===== */}
+            {/* 作成モーダル */}
             {open && (
                 <Modal onClose={() => setOpen(false)} title="新規依頼を作成">
                     <div className="space-y-4">
@@ -533,6 +598,7 @@ export default function BbsPage() {
                                 onClick={addTaskFromModal}
                                 className="rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:translate-y-px disabled:opacity-60"
                                 disabled={!me?.id}
+                                aria-disabled={!me?.id}
                                 title={!me?.id ? 'ユーザー情報取得中' : '依頼を投稿'}
                             >
                                 依頼を投稿
@@ -545,14 +611,26 @@ export default function BbsPage() {
     );
 }
 
-/** シンプルなモーダル（背景ブラー + カード） */
+/**
+ * 汎用モーダル
+ * - Esc キーで閉じる
+ * - 背景クリックで閉じる
+ * - タイトルは aria-labelledby で参照
+ */
 function Modal(props: { title: string; onClose: () => void; children: React.ReactNode }) {
+    // Esc で閉じる
+    const onKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Escape') props.onClose();
+    };
+    const titleId = 'modal-title';
+
     return (
         <div
             className="fixed inset-0 z-50 grid place-items-center p-4"
             role="dialog"
             aria-modal="true"
-            aria-label={props.title}
+            aria-labelledby={titleId}
+            onKeyDown={onKeyDown}
         >
             <div
                 className="absolute inset-0 bg-black/40 backdrop-blur-sm"
@@ -560,7 +638,7 @@ function Modal(props: { title: string; onClose: () => void; children: React.Reac
             />
             <div className="relative z-10 w-full max-w-xl rounded-2xl border border-gray-200 bg-white/95 p-5 shadow-xl ring-1 ring-black/5 dark:border-gray-800 dark:bg-gray-900/95 dark:ring-white/10">
                 <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-base font-semibold">{props.title}</h3>
+                    <h3 id={titleId} className="text-base font-semibold">{props.title}</h3>
                     <button
                         onClick={props.onClose}
                         className="rounded-md p-1 text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
