@@ -179,14 +179,28 @@ export default function BbsPage() {
     useEffect(() => {
         const ac = new AbortController();
 
-        // fetch をラップして、AbortError は正常終了として無視する
+        function isAbortError(value: unknown): boolean {
+            // DOMException: name が AbortError
+            if (value instanceof DOMException && value.name === 'AbortError') return true;
+
+            // fetch polyfill 等: 理由文字列で "component_unmounted" を渡すケース
+            if (typeof value === 'string') return value === 'component_unmounted';
+
+            // Error/例外オブジェクトに message がある場合
+            if (typeof value === 'object' && value !== null && 'message' in value) {
+                const m = (value as { message?: unknown }).message;
+                return typeof m === 'string' && m === 'component_unmounted';
+            }
+                return false;
+            }
+
         async function safeFetch(input: RequestInfo | URL, init?: RequestInit) {
             try {
                 return await fetch(input, { ...init, signal: ac.signal });
-            } catch (e) {
-                if (e instanceof DOMException && e.name === 'AbortError') return null;
-                if (typeof e === 'string' && e === 'component_unmounted') return null;
-                if (typeof e === 'object' && e && 'message' in e && (e as any).message === 'component_unmounted') return null;
+            } catch (e: unknown) {
+                // Abort は正常なキャンセルとして無視（ログ出さない）
+                if (isAbortError(e)) return null;
+                // それ以外は本当の失敗としてスロー
                 throw e;
             }
         }

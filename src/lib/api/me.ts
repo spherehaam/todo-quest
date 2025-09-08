@@ -32,7 +32,7 @@ export async function handleGetMe(): Promise<NextResponse> {
             { ok: true, id: payload.sub, email: payload.email ?? null },
             { status: 200, headers: noStore }
         );
-    } catch (err) {
+    } catch {
         // 失効・改ざんなどの一般的な認証エラー: 401
         // 開発中のみ詳細を見たい場合は以下を有効化
         // if (process.env.NODE_ENV === 'development') console.debug('verifyAccess failed:', err);

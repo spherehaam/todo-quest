@@ -56,7 +56,7 @@ export async function handleGetUsers() {
             { ok: true, users },
             { status: 200, headers: NO_STORE }
         );
-    } catch (e) {
+    } catch {
         // if (process.env.NODE_ENV === 'development') console.error('handleGetUsers failed:', e);
         return NextResponse.json(
             { ok: false, error: 'failed_to_fetch' },
@@ -70,15 +70,11 @@ export async function handleGetUsers() {
  * - 現状未サポート。将来的にプロフィール更新等を実装する場合はここに追加
  * - 明示的に 405 を返す（Allow ヘッダを付与）
  */
-export async function handlePostUsers(_req: Request) {
+export async function handlePostUsers(req: Request) {
+    void req;
+
     return NextResponse.json(
-        { ok: false, error: 'method_not_allowed' },
-        {
-            status: 405,
-            headers: {
-                ...NO_STORE,
-                Allow: 'GET',
-            },
-        }
+        { ok: false, error: 'not_implemented' },
+        { status: 501 }
     );
 }
