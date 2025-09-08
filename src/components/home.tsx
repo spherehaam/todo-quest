@@ -1,20 +1,23 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
-/** タスクの型定義 */
+/** ステータス型：先に宣言しておくと Task 型定義で参照しやすい */
+type TaskStatus = 'open' | 'in_progress' | 'done';
+
 type Task = {
     id: string;
     title: string;
     description?: string;
-    due_date?: string;
+    due_date?: string;        // APIが date 文字列（YYYY-MM-DD）を想定するならその形式を入れる
     status: TaskStatus;
     created_at: string;
     contractor?: string;
 };
 
-// 追加：作成時に送るための型
+/** 新規作成ペイロード（id/created_at はサーバー側で付与） */
 type NewTaskPayload = Omit<Task, 'id' | 'created_at'>;
 
 type Users = {
@@ -24,40 +27,42 @@ type Users = {
     exp?: number;
 };
 
-/** クッキーから値を取得 */
+/** クッキー取得（URLエンコードを考慮して decode） */
 function readCookie(name: string) {
-    return document.cookie
+    const raw = document.cookie
         .split('; ')
         .find((row) => row.startsWith(name + '='))
         ?.split('=')[1];
+    return raw ? decodeURIComponent(raw) : undefined;
 }
 
-/** 日時文字列の整形（ISO/任意→ローカル表示）。不正値は "-" 表示 */
+/**
+ * Dateオブジェクト → YYYY-MM-DD（ローカル日付）のヘルパー
+ * - サーバーが date 型（時刻なし）を期待するケースに合わせる
+ * - もし ISO8601（toISOString）をサーバーが期待するなら、この関数は使わず ISO を送る
+ */
+function toYmdLocal(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+/** 日時表示（ローカル）。不正値は '-' 表示 */
 function fmtDate(input?: string | null): string {
-    if (!input) {
-        return '-';
-    }
+    if (!input) return '-';
     const d = new Date(input);
-    if (isNaN(d.getTime())) {
-        return '-';
-    }
+    if (isNaN(d.getTime())) return '-';
     return d.toLocaleString();
 }
 
-/** 日付のみの整形（不正値は "-"） */
+/** 日付のみ表示（ローカル）。不正値は '-' 表示 */
 function fmtDateOnly(input?: string | null): string {
-    if (!input) {
-        return '-';
-    }
+    if (!input) return '-';
     const d = new Date(input);
-    if (isNaN(d.getTime())) {
-        return '-';
-    }
+    if (isNaN(d.getTime())) return '-';
     return d.toLocaleDateString();
 }
-
-/** ===== ステータス編集用 追加分（既存に影響しない形で定義） ===== */
-type TaskStatus = 'open' | 'in_progress' | 'done';
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
     open: '未完了',
@@ -67,7 +72,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 
 const ALL_STATUSES: TaskStatus[] = ['open', 'in_progress', 'done'];
 
-/** ステータス更新API（/api/tasks/[id]/status に PATCH を想定） */
+/** ステータス更新API呼び出し。失敗時は例外を投げる（呼び出し側でロールバック） */
 async function updateTaskStatus(taskId: string, next: TaskStatus) {
     const res = await fetch(`/api/tasks/status`, {
         method: 'PATCH',
@@ -76,7 +81,7 @@ async function updateTaskStatus(taskId: string, next: TaskStatus) {
             'X-CSRF-Token': readCookie('csrf_token') ?? '',
         },
         credentials: 'include',
-        body: JSON.stringify({ taskId: taskId, status: next }),
+        body: JSON.stringify({ taskId, status: next }),
     });
     if (!res.ok) {
         const msg = await res.text().catch(() => '');
@@ -86,7 +91,10 @@ async function updateTaskStatus(taskId: string, next: TaskStatus) {
     return json as { status: TaskStatus };
 }
 
-/** ステータスセル（クリックでセレクトに切替 → 楽観的更新） */
+/**
+ * ステータスのインライン編集セル
+ * - 先にローカル更新し、API失敗時に onRevert で戻す（楽観UI + ロールバック）
+ */
 function StatusCell(props: {
     taskId: string;
     value: TaskStatus;
@@ -111,12 +119,14 @@ function StatusCell(props: {
             return;
         }
         const prev = value;
-        onLocalChange(next); // 楽観的更新
+
+        // 楽観更新 → API → 失敗時ロールバック
+        onLocalChange(next);
         setSaving(true);
         try {
             await updateTaskStatus(taskId, next);
         } catch (err) {
-            onRevert(prev); // 失敗時ロールバック
+            onRevert(prev);
             console.error(err);
             alert('ステータスの更新に失敗しました。');
         } finally {
@@ -129,7 +139,7 @@ function StatusCell(props: {
         return (
             <button
                 type="button"
-                className="w-full rounded px-2 py-1 text-left transition hover:bg-gray-100 dark:hover:bg-gray-800"
+                className="w-full rounded px-2 py-1 text-left transition hover:bg-gray-100 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 rounded-sm"
                 onClick={() => setEditing(true)}
                 onKeyDown={handleKeyDown}
                 aria-label={`ステータスを編集: 現在は ${STATUS_LABEL[value]}`}
@@ -158,11 +168,8 @@ function StatusCell(props: {
         </select>
     );
 }
-/** ===== ここまで既存 ===== */
 
-/** ===== スケルトン & シマー ===== */
-
-/** 上部に表示するシマー進捗バー（ロード中のみ） */
+/** ヘッダー下のシマー */
 function ShimmerBar() {
     return (
         <div className="h-1 w-full overflow-hidden rounded-full bg-gradient-to-r from-indigo-100 via-blue-100 to-indigo-100 dark:from-indigo-900/40 dark:via-blue-900/40 dark:to-indigo-900/40">
@@ -244,17 +251,16 @@ function SkeletonTable() {
     );
 }
 
-/** ===== ここまでスケルトン ===== */
-
 export default function HomePage() {
     const [email, setEmail] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [tasks, setTasks] = useState<Task[]>([]);
 
+    // 新規作成フォーム
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
-    const [newDueLocal, setNewDueLocal] = useState('');
-    const [newStatus, setNewStatus] = useState<'open' | 'in_progress' | 'done'>('open');
+    const [newDueLocal, setNewDueLocal] = useState(''); // <input type="date"> の値（YYYY-MM-DD）
+    const [newStatus, setNewStatus] = useState<TaskStatus>('open');
 
     const [msg, setMsg] = useState('');
     const [users, setUsers] = useState<Users[]>([]);
@@ -263,7 +269,7 @@ export default function HomePage() {
     useEffect(() => {
         async function bootstrap() {
             try {
-                // 1) 認証確認
+                // 1) 自分情報
                 const meRes = await fetch('/api/me', { credentials: 'include' });
                 if (!meRes.ok) {
                     router.push('/');
@@ -272,13 +278,17 @@ export default function HomePage() {
                 const me = await meRes.json();
                 setEmail(me.email);
 
-                // 2) ユーザー取得（配列を返す）
+                // 2) ユーザー一覧
                 const usersFetched = await fetchUsers();
 
-                // 3) タスク一覧取得
+                // 3) デフォルトで先頭ユーザーのタスクを読む（必要なら UX に合わせて選択式へ）
                 if (usersFetched.length > 0) {
                     await fetchTasks(usersFetched[0].id);
                 }
+            } catch (e) {
+                console.error('bootstrap failed:', e);
+                setTasks([]);
+                setUsers([]);
             } finally {
                 setLoading(false);
             }
@@ -289,41 +299,51 @@ export default function HomePage() {
                 ? `/api/tasks?contractor=${encodeURIComponent(contractor)}`
                 : `/api/tasks`;
 
-            const res = await fetch(url, { credentials: 'include' });
-            if (res.ok) {
-                const data = await res.json();
-                setTasks(data.tasks ?? []);
-            } else {
+            try {
+                const res = await fetch(url, { credentials: 'include' });
+                if (res.ok) {
+                    const data = await res.json();
+                    setTasks(data.tasks ?? []);
+                } else {
+                    setTasks([]);
+                }
+            } catch (e) {
+                console.error('fetchTasks failed:', e);
                 setTasks([]);
             }
         }
 
         async function fetchUsers(): Promise<Users[]> {
-            const res = await fetch('/api/users', { credentials: 'include' });
-            if (!res.ok) {
+            try {
+                const res = await fetch('/api/users', { credentials: 'include' });
+                if (!res.ok) {
+                    setUsers([]);
+                    return [];
+                }
+                const data = await res.json();
+                const list: Users[] = data.users ?? [];
+                setUsers(list);
+                return list;
+            } catch (e) {
+                console.error('fetchUsers failed:', e);
                 setUsers([]);
                 return [];
             }
-            const data = await res.json();
-            const list: Users[] = data.users ?? [];
-            setUsers(list);
-            return list;
         }
 
         bootstrap();
     }, [router]);
 
-    // 状態が更新された「後」の users を見たい場合は、別の useEffect でログ
     useEffect(() => {
+        // デバッグログ（必要なければ削除OK）
         if (users.length > 0) {
             console.log('users (state changed):', users);
             console.log('users[0].id:', users[0].id);
         }
     }, [users]);
 
-    /** タスク追加 */
-    // 置き換え 3: addTask() 内の payload 作成ロジック（any を使わない）
-    async function addTask() {
+    /** 新規タスク追加（最小バリデーション＋CSRF付与） */
+    const addTask = useCallback(async () => {
         const title = newTitle.trim();
         if (!title) {
             setMsg('タイトルを入力してください');
@@ -342,41 +362,49 @@ export default function HomePage() {
             payload.description = description;
         }
 
+        // 期限の送信形式について：
+        // - サーバーが date（YYYY-MM-DD）を期待 → toYmdLocal を使う
         if (newDueLocal) {
             const d = new Date(newDueLocal);
             if (!isNaN(d.getTime())) {
-                payload.due_date = d.toISOString();
+                payload.due_date = toYmdLocal(d);
             }
         }
+
         if (users[0]?.id) {
             payload.contractor = users[0].id;
         }
 
-        const res = await fetch('/api/tasks', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRF-Token': csrf
-            },
-            credentials: 'include',
-            body: JSON.stringify(payload)
-        });
+        try {
+            const res = await fetch('/api/tasks', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrf
+                },
+                credentials: 'include',
+                body: JSON.stringify(payload)
+            });
 
-        const data = await res.json();
-        if (res.ok) {
-            setTasks((prev) => [data.task as Task, ...prev]);
-            setNewTitle('');
-            setNewDescription('');
-            setNewDueLocal('');
-            setNewStatus('open');
-            setMsg('追加しました');
-        } else {
-            setMsg(`追加に失敗: ${data.error ?? 'unknown error'}`);
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                setTasks((prev) => [data.task as Task, ...prev]);
+                setNewTitle('');
+                setNewDescription('');
+                setNewDueLocal('');
+                setNewStatus('open');
+                setMsg('追加しました');
+            } else {
+                setMsg(`追加に失敗: ${data.error ?? 'unknown error'}`);
+            }
+        } catch (e) {
+            console.error('addTask failed:', e);
+            setMsg('追加に失敗: ネットワークエラー');
         }
-    }
+    }, [newTitle, newDescription, newDueLocal, newStatus, users]);
 
-    /** ログアウト */
-    async function logout() {
+    /** ログアウト：CSRF付与のうえトップへ */
+    const logout = useCallback(async () => {
         const csrf = readCookie('csrf_token') ?? '';
         await fetch('/api/logout', {
             method: 'POST',
@@ -384,14 +412,12 @@ export default function HomePage() {
             credentials: 'include'
         });
         router.push('/');
-    }
+    }, [router]);
 
     return (
         <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
-            {/* ===== ヘッダー ===== */}
             <header className="sticky top-0 z-30 border-b border-gray-200/70 bg-white/80 backdrop-blur dark:border-gray-800 dark:bg-gray-900/70">
                 <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-                    {/* ロゴ / ブランド */}
                     <div className="flex items-center gap-2">
                         <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600" />
                         <span className="text-sm font-semibold tracking-wide">
@@ -417,6 +443,7 @@ export default function HomePage() {
                             onClick={logout}
                             className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800"
                             disabled={loading}
+                            aria-disabled={loading}
                         >
                             ログアウト
                         </button>
@@ -432,28 +459,28 @@ export default function HomePage() {
                     <SkeletonSidebar />
                 ) : (
                     <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
-                        <nav className="space-y-1">
+                        <nav className="space-y-1" aria-label="サイドバー">
                             <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
                                 メニュー
                             </div>
-                            <a
+                            {/* 内部リンクは Link でプリフェッチ */}
+                            <Link
                                 href="/home"
-                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 rounded-sm"
                             >
                                 <span>📋</span> <span>ホーム</span>
-                            </a>
-                            <a
+                            </Link>
+                            <Link
                                 href="/bbs"
-                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 rounded-sm"
                             >
                                 <span>📋</span> <span>タスク掲示板</span>
-                            </a>
+                            </Link>
                             <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
                         </nav>
                     </aside>
                 )}
 
-                {/* ===== メインコンテンツ ===== */}
                 <main className="space-y-4" aria-busy={loading} aria-live="polite">
                     {loading ? (
                         <>
@@ -462,12 +489,11 @@ export default function HomePage() {
                         </>
                     ) : (
                         <>
-                            {/* 入力フォーム */}
+                            {/* 新規タスク作成フォーム */}
                             <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
                                 <h1 className="mb-2 text-lg font-semibold">ようこそ、{email} さん</h1>
 
                                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
-                                    {/* 1行目 */}
                                     <input
                                         className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
                                         placeholder="タイトル"
@@ -487,11 +513,10 @@ export default function HomePage() {
                                         onChange={(e) => setNewDueLocal(e.target.value)}
                                     />
 
-                                    {/* 2行目 */}
                                     <select
                                         className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
                                         value={newStatus}
-                                        onChange={(e) => setNewStatus(e.target.value as 'open' | 'in_progress' | 'done')}
+                                        onChange={(e) => setNewStatus(e.target.value as TaskStatus)}
                                     >
                                         <option value="open">未完了</option>
                                         <option value="in_progress">進行中</option>
@@ -513,7 +538,7 @@ export default function HomePage() {
                                 )}
                             </section>
 
-                            {/* タスク一覧 */}
+                            {/* タスク一覧テーブル */}
                             <section className="rounded-2xl border border-gray-200 bg-white p-0 dark:border-gray-800 dark:bg-gray-900">
                                 <div className="border-b border-gray-200 p-4 dark:border-gray-800">
                                     <h2 className="text-sm font-semibold">タスク一覧</h2>
@@ -550,6 +575,7 @@ export default function HomePage() {
                                                             taskId={t.id}
                                                             value={t.status}
                                                             onLocalChange={(next) => {
+                                                                // 楽観更新：先にローカルを書き換える
                                                                 setTasks((prev) =>
                                                                     prev.map((x) =>
                                                                         x.id === t.id ? { ...x, status: next } : x
@@ -557,6 +583,7 @@ export default function HomePage() {
                                                                 );
                                                             }}
                                                             onRevert={(prevStatus) => {
+                                                                // 失敗時ロールバック：以前の値に戻す
                                                                 setTasks((prev) =>
                                                                     prev.map((x) =>
                                                                         x.id === t.id ? { ...x, status: prevStatus } : x
