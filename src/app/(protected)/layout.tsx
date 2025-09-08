@@ -1,34 +1,34 @@
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
 import { readAccessTokenFromCookie, verifyAccess } from '@/lib/auth/common';
 
-/**
- * 認証が必要なページ用のレイアウト
- *
- * - サーバーコンポーネントとして実行されるため、初期レンダリング時に
- *   クライアントへ返す前に認証チェックが走る。
- * - ログインしていない場合や JWT が不正な場合は `/login` に即リダイレクト。
- * - チラつき（画面が一瞬表示される現象）を防止できる。
- */
-export default async function ProtectedLayout({ children }: { children: ReactNode }) {
-    // Cookie からアクセストークンを取得
+type Props = Readonly<{
+    children: ReactNode;
+}>;
+
+export default async function ProtectedLayout({ children }: Props) {
+    // 1) このファイル内で cookies() を触ることで動的化を担保
+    //    （readAccessTokenFromCookie が内部で cookies() を使っていない場合の保険）
+    cookies();
+
     const token = await readAccessTokenFromCookie();
 
     if (!token) {
-        // トークンが無ければ即ログインページへ
+        // TODO: 可能なら /login?next=... を検討（Middlewareで現在URL取得して付与するのが安全）
         redirect('/login');
     }
 
     try {
-        // JWT を検証（署名や有効期限を確認）
         await verifyAccess(token);
-    } catch {
-        // 検証に失敗したらログインページへリダイレクト
+    } catch (err) {
+        // 2) 想定外エラーの最低限ログ（本番では専用ロガーに送る）
+        console.error('[ProtectedLayout] verifyAccess failed:', err);
         redirect('/login');
     }
 
-    // 認証に成功した場合のみ子コンポーネントを描画
     return <>{children}</>;
 }
