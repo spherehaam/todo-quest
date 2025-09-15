@@ -5,6 +5,8 @@ import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { readAccessTokenFromCookie, verifyAccess } from '@/lib/auth/common';
+import Header from '@/components/header';
+import Footer from '@/components/footer';
 
 type Props = Readonly<{
     children: ReactNode;
@@ -30,5 +32,11 @@ export default async function ProtectedLayout({ children }: Props) {
         redirect('/login');
     }
 
-    return <>{children}</>;
+    return (
+        <>
+            <Header />
+            <>{children}</>
+            <Footer />
+        </>
+    );
 }
