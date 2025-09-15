@@ -140,6 +140,9 @@ function SkeletonSidebar() {
     );
 }
 
+/** スケルトン最小表示時間(ms) */
+const MIN_SKELETON_MS = 450;
+
 /**
  * タスク掲示板ページ（クライアントコンポーネント）
  * - 初回マウント時に /api/me と /api/tasks/bbs を取得
@@ -179,6 +182,7 @@ export default function BbsPage() {
      */
     useEffect(() => {
         const ac = new AbortController();
+        let hideTimer: number | null = null;
 
         /**
          * Abort によるキャンセルかどうか判定するユーティリティ
@@ -206,21 +210,25 @@ export default function BbsPage() {
         }
 
         async function bootstrap() {
+            const start = performance.now();
             try {
                 // ログインユーザー取得
                 const res = await safeFetch('/api/me', { credentials: 'include' });
                 if (!res) return;
                 if (!res.ok) {
-                    router.push('/');
+                    const elapsed = performance.now() - start;
+                    const rest = Math.max(0, MIN_SKELETON_MS - elapsed);
+                    hideTimer = window.setTimeout(() => {
+                        setLoading(false);
+                        router.push('/');
+                    }, rest);
                     return;
                 }
                 const me: Me = await res.json();
                 setMe(me);
 
-                // 掲示板タスク取得
                 const tRes = await safeFetch('/api/tasks/bbs', { credentials: 'include' });
-                if (!tRes) return;
-                if (tRes.ok) {
+                if (tRes && tRes.ok) {
                     const json = await tRes.json();
                     setTasks(json.tasks ?? []);
                 } else {
@@ -230,7 +238,9 @@ export default function BbsPage() {
                 console.error('[bbs] bootstrap failed:', e); // ネットワーク等の本当の失敗だけを記録
                 setTasks([]);
             } finally {
-                setLoading(false);
+                const elapsed = performance.now() - start;
+                const rest = Math.max(0, MIN_SKELETON_MS - elapsed);
+                hideTimer = window.setTimeout(() => setLoading(false), rest);
             }
         }
 
@@ -239,6 +249,7 @@ export default function BbsPage() {
         return () => {
             // アンマウント時に fetch を中断
             ac.abort('component_unmounted');
+            if (hideTimer) clearTimeout(hideTimer);
         };
     }, [router]);
 
@@ -321,13 +332,13 @@ export default function BbsPage() {
         try {
             const csrf = readCookie('csrf_token') ?? '';
             const res = await fetch('/api/tasks/accept', {
-                method: 'POST',
+                method: 'PATCH',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-CSRF-Token': csrf,
                 },
                 credentials: 'include',
-                body: JSON.stringify({ taskId: id }), // ★ クエリではなく Body で送る
+                body: JSON.stringify({ taskId: id }),
             });
             if (!res.ok) {
                 // 失敗時ロールバック

@@ -89,34 +89,83 @@ function safeEqual(a: string, b: string): boolean {
     return crypto.timingSafeEqual(ab, bb);
 }
 
+/** ホスト名の正規化（小文字化・ポート除去） */
+function normalizeHost(input: string): string {
+    return input.toLowerCase().replace(/:\d+$/, '');
+}
+
+/** 許可ホスト／信頼サフィックスとの比較（サブドメイン許容） */
+function hostMatches(givenHost: string, allowedHosts: string[], trustedSuffixes: string[] = []): boolean {
+    const g = normalizeHost(givenHost);
+    return (
+        allowedHosts.some((a) => {
+            const ah = normalizeHost(a);
+            return g === ah || g.endsWith('.' + ah);
+        }) ||
+        trustedSuffixes.some((suf) => {
+            const s = suf.replace(/^\./, '').toLowerCase();
+            return g === s || g.endsWith('.' + s);
+        })
+    );
+}
+
 /**
  * CSRF 検証
- * - Double Submit Cookie（Cookie とヘッダの一致）
- * - かつ Origin/Referer が同一オリジンなら OK（ヘッダが存在する場合のみ検査）
+ * - Double Submit Cookie（Cookie とヘッダの一致）を主軸に
+ * - 追加防御: Sec-Fetch-Site が cross-site なら拒否
+ * - Origin/Referer は「存在するときだけ」堅牢なホスト比較で確認（無ければ通す）
  */
 export async function requireCsrf() {
     const c = await cookies();
     const h = await headers();
 
     const csrfCookie = c.get(COOKIE_CSRF)?.value ?? '';
-    const csrfHeader = h.get('X-CSRF-Token') ?? '';
+    const csrfHeader = h.get('x-csrf-token') ?? h.get('X-CSRF-Token') ?? '';
 
-    // Double Submit 一致
+    // 1) Double Submit 一致
     if (!csrfCookie || !csrfHeader || !safeEqual(csrfCookie, csrfHeader)) {
         throw new Error('csrf_mismatch');
     }
 
-    // 追加防御: Origin/Referer が存在する場合は必ず同一オリジン
-    const origin = h.get('Origin') ?? '';
-    const referer = h.get('Referer') ?? '';
-    const host = h.get('Host') ?? '';
-    const expectedSuffix = `://${host}`;
+    // 2) 追加防御: 明らかなクロスサイト起点は拒否
+    const secFetchSite = h.get('sec-fetch-site'); // 'same-origin' | 'same-site' | 'cross-site' | 'none'
+    if (secFetchSite && secFetchSite === 'cross-site') {
+        throw new Error('csrf_mismatch');
+    }
 
-    const sameOrigin =
-        (!origin || origin.endsWith(expectedSuffix)) &&
-        (!referer || referer.includes(`://${host}/`));
+    // 3) Origin/Referer は在るときだけ許可ホストに合致するかチェック（無ければスキップして通す）
+    const origin = h.get('origin');
+    const referer = h.get('referer');
 
-    if (!sameOrigin) {
+    // 自分自身のホスト（プロキシ考慮）
+    const selfHost =
+        h.get('x-forwarded-host') ??
+        h.get('host') ??
+        new URL('http://localhost').host; // フォールバック
+
+    const allowedHosts = [
+        selfHost,
+        process.env.PUBLIC_BASE_HOST ?? '',   // 例: 'example.com'
+        'localhost',
+        '127.0.0.1',
+    ].filter(Boolean);
+
+    const trustedSuffixes = [
+        process.env.PUBLIC_TRUSTED_SUFFIX ?? '', // 例: '.vercel.app'
+    ].filter(Boolean);
+
+    const headerHostOk = (val: string | null): boolean => {
+        if (!val) return true; // 無ければ通す（壊れにくさ優先）
+        try {
+            const host = new URL(val).host;
+            return hostMatches(host, allowedHosts, trustedSuffixes);
+        } catch {
+            // 不正URLは拒否
+            return false;
+        }
+    };
+
+    if (!headerHostOk(origin) || !headerHostOk(referer)) {
         throw new Error('csrf_mismatch');
     }
 }

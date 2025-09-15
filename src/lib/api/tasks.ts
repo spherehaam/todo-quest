@@ -461,15 +461,12 @@ export async function handleGetTasksBbs() {
  * - CSRF 検証あり（await requireCsrf(); は現状維持）
  * - 競合時は 409
  */
-export async function handlePostTasksAccept(req: Request) {
+export async function handlePatchTasksAccept(req: Request) {
     try {
-        // （必要ならデバッグは残してOK）
-        // const hdr = req.headers.get('x-csrf-token');
-        // const cks = req.headers.get('cookie') ?? '';
-        // console.log('[accept] header:x-csrf-token=', hdr);
-        // console.log('[accept] cookie=', cks);
+        console.log('ccc');
 
         const token = await readAccessTokenFromCookie();
+        console.log('token:', token);
         if (!token) {
             return NextResponse.json(
                 { ok: false, error: 'no_auth' },
@@ -477,21 +474,23 @@ export async function handlePostTasksAccept(req: Request) {
             );
         }
         const payload = await verifyAccess(token);
+        console.log('payload:', payload);
 
-        // ★ 既存方針どおり（引数なし）で呼び出し
+        // CSRFチェック（X-CSRF-Tokenヘッダを想定）
         await requireCsrf();
 
-        // ★ Body から taskId を受け取る
+        // Body から taskId を受け取る
         type Body = { taskId?: unknown };
         let body: Body = {};
         try {
-            // Content-Type: application/json 前提
             body = (await req.json()) as Body;
+            console.log('body:', body);
         } catch {
-            // JSONでない/空ボディはそのまま弾く
+            // JSONでない/空は弾く
         }
 
         const taskId = typeof body?.taskId === 'string' ? body.taskId.trim() : '';
+        console.log('taskId:', taskId);
         if (!taskId) {
             return NextResponse.json(
                 { ok: false, error: 'missing_id' },
@@ -500,10 +499,12 @@ export async function handlePostTasksAccept(req: Request) {
         }
 
         const contractorId = String(payload.sub);
+        console.log('contractorId:', contractorId);
 
         const updated = await dbUpdateTaskAccept(taskId, contractorId);
+        console.log('updated:', updated);
         if (!updated) {
-            // 既に他のユーザーが受注 / open でない / レコードなし 等
+            // 既に他のユーザーが受注 / openでない / レコードなし 等
             return NextResponse.json(
                 { ok: false, error: 'conflict_or_not_open' },
                 { status: 409, headers: NO_STORE }

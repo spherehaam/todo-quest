@@ -1,7 +1,8 @@
 export const runtime = 'nodejs';
 
-import { handlePostTasksAccept } from '@/lib/api/tasks';
+import { handlePatchTasksAccept } from '@/lib/api/tasks';
 
-export async function POST(req: Request) {
-    return handlePostTasksAccept(req);
+export async function PATCH(req: Request) {
+    console.log('bbb');
+    return handlePatchTasksAccept(req);
 }
