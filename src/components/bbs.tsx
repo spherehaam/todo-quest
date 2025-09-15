@@ -19,6 +19,7 @@ type Task = {
     created_at: string;
     reward?: number;
     contractor: string | null;
+    owner_username: string | null;
 };
 
 /** /api/me の戻り値 */
@@ -319,10 +320,14 @@ export default function BbsPage() {
 
         try {
             const csrf = readCookie('csrf_token') ?? '';
-            const res = await fetch(`/api/tasks/${id}/accept`, {
+            const res = await fetch('/api/tasks/accept', {
                 method: 'POST',
-                headers: { 'X-CSRF-Token': csrf },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrf,
+                },
                 credentials: 'include',
+                body: JSON.stringify({ taskId: id }), // ★ クエリではなく Body で送る
             });
             if (!res.ok) {
                 // 失敗時ロールバック
@@ -336,10 +341,15 @@ export default function BbsPage() {
             }
         } catch {
             // 通信エラー時ロールバック
-            setTasks((prev) => prev.map((t) => t.id === id ? { ...t, status: 'open', contractor: null } : t));
+            setTasks((prev) =>
+                prev.map((t) =>
+                    t.id === id ? { ...t, status: 'open', contractor: null } : t
+                )
+            );
             alert('通信エラーが発生しました');
         }
     }, [me?.id]);
+
 
     /**
      * ログアウト
@@ -507,7 +517,7 @@ export default function BbsPage() {
 
                                                 <div className="flex flex-wrap items-center gap-2 text-xs">
                                                     <span className={pillClass()}>
-                                                        依頼者ID: <strong className="font-semibold">{t.owner_id}</strong>
+                                                        依頼者: <strong className="font-semibold">{t.owner_username}</strong>
                                                     </span>
                                                     {typeof t.difficulty === 'number' && (
                                                         <span className={pillClass()}>
@@ -521,7 +531,7 @@ export default function BbsPage() {
                                                     )}
                                                     {t.due_date && (
                                                         <span className={pillClass()}>
-                                                            期日: {t.due_date}
+                                                            期日: {new Date(t.due_date).toLocaleDateString("ja-JP")}
                                                         </span>
                                                     )}
                                                 </div>

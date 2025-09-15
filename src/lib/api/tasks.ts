@@ -100,13 +100,44 @@ async function dbUpdateTaskStatus(params: {
 
 async function dbGetTasksBbs(): Promise<Task[]> {
     const rows = await sql`
-        SELECT id, owner_id, title, description, due_date, status, created_at, contractor
-        FROM tasks
-        WHERE contractor IS NULL
-        AND status = 'open'
-        ORDER BY created_at DESC
+        SELECT 
+            t.id,
+            t.owner_id,
+            u.username AS owner_username,
+            t.title,
+            t.description,
+            t.due_date,
+            t.status,
+            t.created_at,
+            t.contractor
+        FROM tasks t
+        INNER JOIN users u
+            ON t.owner_id = u.id
+        WHERE t.contractor IS NULL
+          AND t.status = 'open'
+        ORDER BY t.created_at DESC
     `;
     return rows as Task[];
+}
+
+/**
+ * タスク受注：status を 'open' → 'in_progress'、contractor を設定
+ * - 競合対策：open かつ contractor IS NULL の行のみ更新
+ * - 0行更新なら null を返す
+ */
+async function dbUpdateTaskAccept(taskId: string, contractorId: string): Promise<Task | null> {
+    const rows = await sql`
+        UPDATE tasks
+        SET 
+            status = 'in_progress',
+            contractor = ${contractorId},
+            updated_at = now()
+        WHERE id = ${taskId}
+          AND status = 'open'
+          AND contractor IS NULL
+        RETURNING id, owner_id, title, description, due_date, status, created_at, contractor
+    `;
+    return (rows[0] as Task) ?? null;
 }
 
 /* =========================
@@ -419,6 +450,82 @@ export async function handleGetTasksBbs() {
         return NextResponse.json(
             { ok: false, error: 'failed_to_fetch' },
             { status: 500, headers: NO_STORE }
+        );
+    }
+}
+
+/**
+ * タスク受注（POST /api/tasks/accept）
+ * - Body: { taskId: string }
+ * - 受注者は認証ユーザー
+ * - CSRF 検証あり（await requireCsrf(); は現状維持）
+ * - 競合時は 409
+ */
+export async function handlePostTasksAccept(req: Request) {
+    try {
+        // （必要ならデバッグは残してOK）
+        // const hdr = req.headers.get('x-csrf-token');
+        // const cks = req.headers.get('cookie') ?? '';
+        // console.log('[accept] header:x-csrf-token=', hdr);
+        // console.log('[accept] cookie=', cks);
+
+        const token = await readAccessTokenFromCookie();
+        if (!token) {
+            return NextResponse.json(
+                { ok: false, error: 'no_auth' },
+                { status: 401, headers: NO_STORE }
+            );
+        }
+        const payload = await verifyAccess(token);
+
+        // ★ 既存方針どおり（引数なし）で呼び出し
+        await requireCsrf();
+
+        // ★ Body から taskId を受け取る
+        type Body = { taskId?: unknown };
+        let body: Body = {};
+        try {
+            // Content-Type: application/json 前提
+            body = (await req.json()) as Body;
+        } catch {
+            // JSONでない/空ボディはそのまま弾く
+        }
+
+        const taskId = typeof body?.taskId === 'string' ? body.taskId.trim() : '';
+        if (!taskId) {
+            return NextResponse.json(
+                { ok: false, error: 'missing_id' },
+                { status: 400, headers: NO_STORE }
+            );
+        }
+
+        const contractorId = String(payload.sub);
+
+        const updated = await dbUpdateTaskAccept(taskId, contractorId);
+        if (!updated) {
+            // 既に他のユーザーが受注 / open でない / レコードなし 等
+            return NextResponse.json(
+                { ok: false, error: 'conflict_or_not_open' },
+                { status: 409, headers: NO_STORE }
+            );
+        }
+
+        return NextResponse.json(
+            { ok: true, task: updated },
+            { status: 200, headers: NO_STORE }
+        );
+    } catch (e) {
+        const message =
+            typeof e === 'object' && e !== null && 'message' in e
+                ? String((e as { message?: unknown }).message)
+                : '';
+        const isCsrf = message === 'csrf_mismatch';
+        const status = isCsrf ? 403 : 500;
+        const code: 'csrf_mismatch' | 'failed_to_accept' = isCsrf ? 'csrf_mismatch' : 'failed_to_accept';
+
+        return NextResponse.json(
+            { ok: false, error: code },
+            { status, headers: NO_STORE }
         );
     }
 }
