@@ -57,7 +57,6 @@ export async function handleGetUsers() {
             { status: 200, headers: NO_STORE }
         );
     } catch {
-        // if (process.env.NODE_ENV === 'development') console.error('handleGetUsers failed:', e);
         return NextResponse.json(
             { ok: false, error: 'failed_to_fetch' },
             { status: 500, headers: NO_STORE }

@@ -67,21 +67,6 @@ function pillClass(): string {
     return 'rounded-full px-2 py-0.5 text-xs ring-1 ring-black/10 bg-white text-gray-700 dark:ring-white/10 dark:bg-white/5 dark:text-gray-200';
 }
 
-/** ヘッダー下に出すシマー（ローディング） */
-function ShimmerBar() {
-    return (
-        <div className="h-1 w-full overflow-hidden rounded-full bg-gradient-to-r from-indigo-100 via-blue-100 to-indigo-100 dark:from-indigo-900/40 dark:via-blue-900/40 dark:to-indigo-900/40">
-            <div className="h-full w-1/3 animate-[shimmer_1.8s_infinite] rounded-full bg-gradient-to-r from-indigo-400/50 via-blue-400/60 to-indigo-400/50 dark:from-indigo-500/50 dark:via-blue-500/60 dark:to-indigo-500/50" />
-            <style jsx>{`
-                @keyframes shimmer {
-                    0% { transform: translateX(-100%); }
-                    100% { transform: translateX(300%); }
-                }
-            `}</style>
-        </div>
-    );
-}
-
 /** 見出し行のスケルトン */
 function SkeletonHeaderRow() {
     return (
@@ -361,22 +346,6 @@ export default function BbsPage() {
         }
     }, [me?.id]);
 
-
-    /**
-     * ログアウト
-     * - CSRF ヘッダを付与して /api/logout へ POST
-     * - 完了したらトップへ
-     */
-    async function logout() {
-        const csrf = readCookie('csrf_token') ?? '';
-        await fetch('/api/logout', {
-            method: 'POST',
-            headers: { 'X-CSRF-Token': csrf },
-            credentials: 'include',
-        });
-        router.push('/');
-    }
-
     // モーダル内の最初の input へフォーカス
     const firstInputRef = useRef<HTMLInputElement | null>(null);
     useEffect(() => {
@@ -396,32 +365,6 @@ export default function BbsPage() {
 
     return (
         <div className="min-h-screen bg-gradient-to-b from-white to-gray-50 text-gray-900 dark:from-gray-950 dark:to-gray-900 dark:text-gray-100">
-            {/* ヘッダー */}
-            <header className="sticky top-0 z-30 border-b border-gray-200/70 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/50 dark:border-gray-800 dark:bg-gray-900/60">
-                <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-                    <div className="flex items-center gap-2">
-                        <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600" />
-                        <span className="text-sm font-semibold tracking-wide">
-                            TodoQuest
-                        </span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                        <span className="hidden text-xs text-gray-500 dark:text-gray-400 sm:inline">
-                            {loading ? 'Loading…' : (me?.email ?? 'Guest')}
-                        </span>
-                        <button
-                            onClick={logout}
-                            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 shadow-sm transition hover:bg-gray-50 active:translate-y-px dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-800/50"
-                            disabled={loading}
-                            aria-disabled={loading}
-                        >
-                            ログアウト
-                        </button>
-                    </div>
-                </div>
-                {/* ローディング中のみシマー表示 */}
-                {loading && <div className="px-4"><div className="mx-auto max-w-6xl py-1"><ShimmerBar /></div></div>}
-            </header>
 
             <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 p-4 sm:grid-cols-[220px_minmax(0,1fr)]">
                 {/* サイドバー（ローディング時はスケルトン） */}
@@ -579,7 +522,6 @@ export default function BbsPage() {
                                 className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-900"
                                 value={title}
                                 onChange={(e) => setTitle(e.target.value)}
-                                placeholder="例: 仕様書のレビュー"
                             />
                         </div>
 

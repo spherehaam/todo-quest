@@ -463,10 +463,8 @@ export async function handleGetTasksBbs() {
  */
 export async function handlePatchTasksAccept(req: Request) {
     try {
-        console.log('ccc');
 
         const token = await readAccessTokenFromCookie();
-        console.log('token:', token);
         if (!token) {
             return NextResponse.json(
                 { ok: false, error: 'no_auth' },
@@ -474,7 +472,6 @@ export async function handlePatchTasksAccept(req: Request) {
             );
         }
         const payload = await verifyAccess(token);
-        console.log('payload:', payload);
 
         // CSRFチェック（X-CSRF-Tokenヘッダを想定）
         await requireCsrf();
@@ -484,13 +481,11 @@ export async function handlePatchTasksAccept(req: Request) {
         let body: Body = {};
         try {
             body = (await req.json()) as Body;
-            console.log('body:', body);
         } catch {
             // JSONでない/空は弾く
         }
 
         const taskId = typeof body?.taskId === 'string' ? body.taskId.trim() : '';
-        console.log('taskId:', taskId);
         if (!taskId) {
             return NextResponse.json(
                 { ok: false, error: 'missing_id' },
@@ -499,10 +494,8 @@ export async function handlePatchTasksAccept(req: Request) {
         }
 
         const contractorId = String(payload.sub);
-        console.log('contractorId:', contractorId);
 
         const updated = await dbUpdateTaskAccept(taskId, contractorId);
-        console.log('updated:', updated);
         if (!updated) {
             // 既に他のユーザーが受注 / openでない / レコードなし 等
             return NextResponse.json(
