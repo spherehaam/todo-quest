@@ -5,37 +5,51 @@ import { NextResponse } from 'next/server';
 import { SignJWT, jwtVerify, JWTPayload } from 'jose';
 import crypto from 'crypto';
 
-/** 本番判定（HTTPS 前提の挙動に関与） */
+/**
+ * 実行環境フラグ
+ */
 const isProd = process.env.NODE_ENV === 'production';
 
 /**
- * SameSite 設定
- * - 'none' を使うなら Secure=true が必須（ブラウザが Set-Cookie を黙殺する）
- * - デフォルトは lax（通常のフォーム/リンク遷移は送信されるが、クロスサイトはブロック）
+ * Cookie の SameSite 属性
+ * - 'lax' を既定
+ * - 3rd party 埋め込み等が必要な場合のみ 'none' にする
  */
 const SAMESITE: 'lax' | 'none' = 'lax';
 
+/** Cookie 名（固定） */
 export const COOKIE_ACCESS = 'auth';
 export const COOKIE_REFRESH = 'refresh';
 export const COOKIE_CSRF = 'csrf_token';
 
-/** 有効期限（秒） */
+/** TTL（秒） */
 export const ACCESS_TTL_SEC = 15 * 60; // 15 minutes
 export const REFRESH_TTL_SEC = 7 * 24 * 60 * 60; // 7 days
 
-/** JWT 秘密鍵を取得（未設定は起動時エラーに） */
+/**
+ * 秘密鍵を取得してバイト列化
+ * - 未設定なら起動時に例外（環境不備を即時検知）
+ */
 function getSecret() {
     const s = process.env.JWT_SECRET;
     if (!s) throw new Error('JWT_SECRET is not set');
     return new TextEncoder().encode(s);
 }
 
-/** 任意トークンをDB等で持つ場合のハッシュ化（可逆でない） */
+/**
+ * トークンや識別子を SHA-256 でハッシュ
+ * - DB に生値を保存しない用途などで使用
+ */
 export function hashToken(value: string) {
     return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-/** アクセストークン発行（短命） */
+/**
+ * アクセストークンを署名
+ * - typ: 'access'
+ * - 署名アルゴリズム: HS256
+ * - 有効期限: ACCESS_TTL_SEC
+ */
 export async function signAccessToken(user: { id: string; email: string }) {
     return await new SignJWT({ sub: user.id, email: user.email, typ: 'access' })
         .setProtectedHeader({ alg: 'HS256' })
@@ -44,7 +58,12 @@ export async function signAccessToken(user: { id: string; email: string }) {
         .sign(getSecret());
 }
 
-/** リフレッシュトークン発行（長命・セッションIDを持たせる） */
+/**
+ * リフレッシュトークンを署名
+ * - typ: 'refresh'
+ * - jti: セッションID（サーバ側で失効管理する想定）
+ * - 有効期限: REFRESH_TTL_SEC
+ */
 export async function signRefreshToken(
     user: { id: string; email: string },
     sessionId: string
@@ -61,7 +80,11 @@ export async function signRefreshToken(
         .sign(getSecret());
 }
 
-/** アクセストークン検証（タイプ/期限/署名） */
+/**
+ * アクセストークンの検証
+ * - typ が 'access' であることを確認
+ * - clockTolerance で僅かな時計ズレを許容
+ */
 export async function verifyAccess(token: string) {
     const { payload } = await jwtVerify(token, getSecret(), {
         algorithms: ['HS256'],
@@ -71,7 +94,10 @@ export async function verifyAccess(token: string) {
     return payload as JWTPayload & { email: string };
 }
 
-/** リフレッシュトークン検証 */
+/**
+ * リフレッシュトークンの検証
+ * - typ が 'refresh' であることを確認
+ */
 export async function verifyRefresh(token: string) {
     const { payload } = await jwtVerify(token, getSecret(), {
         algorithms: ['HS256'],
@@ -81,7 +107,9 @@ export async function verifyRefresh(token: string) {
     return payload as JWTPayload & { email: string; jti: string };
 }
 
-/** timing-safe な比較（長さが違えば false） */
+/**
+ * タイミング攻撃耐性のある比較
+ */
 function safeEqual(a: string, b: string): boolean {
     const ab = Buffer.from(a);
     const bb = Buffer.from(b);
@@ -89,12 +117,18 @@ function safeEqual(a: string, b: string): boolean {
     return crypto.timingSafeEqual(ab, bb);
 }
 
-/** ホスト名の正規化（小文字化・ポート除去） */
+/**
+ * ホスト名の正規化（ポート除去・小文字化）
+ */
 function normalizeHost(input: string): string {
     return input.toLowerCase().replace(/:\d+$/, '');
 }
 
-/** 許可ホスト／信頼サフィックスとの比較（サブドメイン許容） */
+/**
+ * 許可ホスト or 信頼サフィックスに一致するか
+ * - a.example.com は example.com 許可で OK
+ * - trustedSuffixes には先頭のドット有無どちらでも可
+ */
 function hostMatches(givenHost: string, allowedHosts: string[], trustedSuffixes: string[] = []): boolean {
     const g = normalizeHost(givenHost);
     return (
@@ -110,58 +144,57 @@ function hostMatches(givenHost: string, allowedHosts: string[], trustedSuffixes:
 }
 
 /**
- * CSRF 検証
- * - Double Submit Cookie（Cookie とヘッダの一致）を主軸に
- * - 追加防御: Sec-Fetch-Site が cross-site なら拒否
- * - Origin/Referer は「存在するときだけ」堅牢なホスト比較で確認（無ければ通す）
+ * CSRF 検証（Cookie+Header, Fetch-Site, Origin/Referer の整合性）
+ * - Cookie とヘッダーのトークン一致（timing safe）
+ * - cross-site POST を拒否（Sec-Fetch-Site）
+ * - Origin/Referer のホストが自分 or 許可ドメインかを確認
+ *
+ * 失敗時: Error('csrf_mismatch') を投げる
  */
 export async function requireCsrf() {
     const c = await cookies();
     const h = await headers();
 
+    // 1) Cookie-Header のトークン一致
     const csrfCookie = c.get(COOKIE_CSRF)?.value ?? '';
     const csrfHeader = h.get('x-csrf-token') ?? h.get('X-CSRF-Token') ?? '';
-
-    // 1) Double Submit 一致
     if (!csrfCookie || !csrfHeader || !safeEqual(csrfCookie, csrfHeader)) {
         throw new Error('csrf_mismatch');
     }
 
-    // 2) 追加防御: 明らかなクロスサイト起点は拒否
+    // 2) cross-site コンテキストを拒否
     const secFetchSite = h.get('sec-fetch-site'); // 'same-origin' | 'same-site' | 'cross-site' | 'none'
     if (secFetchSite && secFetchSite === 'cross-site') {
         throw new Error('csrf_mismatch');
     }
 
-    // 3) Origin/Referer は在るときだけ許可ホストに合致するかチェック（無ければスキップして通す）
+    // 3) Origin/Referer のホスト検証
     const origin = h.get('origin');
     const referer = h.get('referer');
 
-    // 自分自身のホスト（プロキシ考慮）
     const selfHost =
         h.get('x-forwarded-host') ??
         h.get('host') ??
-        new URL('http://localhost').host; // フォールバック
+        new URL('http://localhost').host;
 
     const allowedHosts = [
         selfHost,
-        process.env.PUBLIC_BASE_HOST ?? '',   // 例: 'example.com'
+        process.env.PUBLIC_BASE_HOST ?? '',
         'localhost',
         '127.0.0.1',
     ].filter(Boolean);
 
     const trustedSuffixes = [
-        process.env.PUBLIC_TRUSTED_SUFFIX ?? '', // 例: '.vercel.app'
+        process.env.PUBLIC_TRUSTED_SUFFIX ?? '',
     ].filter(Boolean);
 
     const headerHostOk = (val: string | null): boolean => {
-        if (!val) return true; // 無ければ通す（壊れにくさ優先）
+        if (!val) return true; // ヘッダ未送信ならこの条件はパス
         try {
             const host = new URL(val).host;
             return hostMatches(host, allowedHosts, trustedSuffixes);
         } catch {
-            // 不正URLは拒否
-            return false;
+            return false; // 不正なURL
         }
     };
 
@@ -170,7 +203,10 @@ export async function requireCsrf() {
     }
 }
 
-/** アクセストークンを HttpOnly Cookie に保存 */
+/**
+ * アクセストークン Cookie を設定
+ * - httpOnly/secure/sameSite/path/maxAge を適切に付与
+ */
 export function setAccessCookie(res: NextResponse, token: string) {
     const secure = isProd || SAMESITE === 'none';
     res.cookies.set(COOKIE_ACCESS, token, {
@@ -182,7 +218,9 @@ export function setAccessCookie(res: NextResponse, token: string) {
     });
 }
 
-/** リフレッシュトークンを HttpOnly Cookie に保存 */
+/**
+ * リフレッシュトークン Cookie を設定
+ */
 export function setRefreshCookie(res: NextResponse, token: string) {
     const secure = isProd || SAMESITE === 'none';
     res.cookies.set(COOKIE_REFRESH, token, {
@@ -194,11 +232,13 @@ export function setRefreshCookie(res: NextResponse, token: string) {
     });
 }
 
-/** フロントから読める CSRF Cookie を設定 */
+/**
+ * CSRF トークン Cookie を設定（JS から参照できる）
+ */
 export function setCsrfCookie(res: NextResponse, value: string) {
     const secure = isProd || SAMESITE === 'none';
     res.cookies.set(COOKIE_CSRF, value, {
-        httpOnly: false, // フロントJSから読み出す想定（Double Submit 用）
+        httpOnly: false,
         secure,
         sameSite: SAMESITE,
         path: '/',
@@ -206,19 +246,19 @@ export function setCsrfCookie(res: NextResponse, value: string) {
     });
 }
 
-/** Cookie からアクセストークン読取（存在しなければ空文字） */
+/** Cookie からアクセストークン読み出し */
 export async function readAccessTokenFromCookie() {
     const c = await cookies();
     return c.get(COOKIE_ACCESS)?.value ?? '';
 }
 
-/** Cookie からリフレッシュトークン読取（存在しなければ空文字） */
+/** Cookie からリフレッシュトークン読み出し */
 export async function readRefreshTokenFromCookie() {
     const c = await cookies();
     return c.get(COOKIE_REFRESH)?.value ?? '';
 }
 
-/** 全認証系 Cookie を削除 */
+/** すべての認証関連 Cookie を削除 */
 export function clearAllAuthCookies(res: NextResponse) {
     res.cookies.delete(COOKIE_ACCESS);
     res.cookies.delete(COOKIE_REFRESH);

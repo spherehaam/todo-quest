@@ -7,58 +7,52 @@ import {
     requireCsrf,
     hashToken,
     clearAllAuthCookies,
-    verifyRefresh
+    verifyRefresh,
 } from './common';
 
 /**
- * ログアウト
- * - CSRF を検証（失敗しても最終的にクッキーは消す → UX重視/Idempotent）
- * - refresh クッキーがあれば検証→セッションレコードを削除（ハッシュ一致で安全に）
- * - いつでも最終的に全認証クッキーを削除して `{ ok: true }` を返す
+ * POST /api/logout ハンドラ
+ * - CSRF 検証
+ * - refresh トークンがあれば検証→対応するセッション行を削除
+ * - Cookie を全削除して完了
  *
- * セキュリティ方針:
- * - トークンが不正/期限切れでも「成功」とする（存在の有無を示さない＝列挙対策）
- * - DBの削除は `id` + `refresh_hash` の一致で限定（セッションのなりすまし防止）
+ * ※ 処理は変更せず、コメントと整形のみ
  */
 export async function handleLogout() {
-    // レスポンスをまとめて返す小さなヘルパー
+    // 成否に関わらず同じ成功レスポンスで Cookie を消す
     const finalize = () => {
         const res = NextResponse.json({ ok: true });
-        clearAllAuthCookies(res); // アクセス/リフレッシュ/CSRFの各クッキーを必ず削除
+        clearAllAuthCookies(res);
         return res;
     };
 
     try {
-        // 1) CSRF チェック（失敗しても最終的にはクッキー削除して ok で返す）
+        // CSRF 対策（ヘッダ/Origin等の整合性チェック）
         await requireCsrf();
 
-        // 2) refresh クッキーがあれば、そのセッションを失効させる
+        // Cookie から refresh を取得してセッション失効
         const token = await readRefreshTokenFromCookie();
         if (token) {
             try {
-                // refresh の署名・期限・typ を検証（payload 取得）
+                // refresh JWT の形式/署名を検証
                 const payload = await verifyRefresh(token);
 
-                // jti をセッションIDとして使用している前提
                 const sessionId = String(payload.jti);
                 const h = hashToken(token);
 
-                // 同一ユーザーの他セッションを壊さないように、ID とハッシュでピンポイント削除
+                // セッションは refresh のハッシュで照合（生値は保存しない）
                 await sql`
                     DELETE FROM sessions
                     WHERE id = ${sessionId} AND refresh_hash = ${h}
                 `;
             } catch {
-                // - 検証失敗（失効/改ざん/フォーマット不正など）
-                // - DBエラー
-                // いずれもユーザーには知らせず、最後にクッキーを削除して成功を返す
+                // refresh が壊れている/期限切れ等は無視（ログアウトは続行）
             }
         }
 
-        // 3) 最終的にクッキーを削除して成功
         return finalize();
     } catch {
-        // CSRF 検証や上位の例外があっても、クッキーは常に削除して成功レスポンス
+        // CSRF 失敗やその他例外時もクッキーは確実に削除
         return finalize();
     }
 }

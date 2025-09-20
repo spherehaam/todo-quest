@@ -2,21 +2,28 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 
-/** トーストの型 */
+// ------------------------------------------------------------
+// Toast 型/ユーティリティ
+// ------------------------------------------------------------
+
 export type ToastType = 'success' | 'error' | 'info' | 'warning';
 
 export type ToastItem = {
-    id: string;
-    type: ToastType;
-    message: string;
-    duration?: number; // ms
+    id: string;          // 一意なID（時刻 + ランダム）
+    type: ToastType;     // 表示タイプ
+    message: string;     // 本文
+    duration?: number;   // 自動クローズまでのms（デフォルト 3000）
 };
 
-/** 低依存なシンプル pub/sub（どこからでも showToast 可能） */
-type Subscriber = (t: ToastItem) => void;
+// 簡易なPubSub。Provider が購読し、showToast から発火する
+// ※ グローバルな Set を利用（アプリ内単一 Provider 前提）
+ type Subscriber = (t: ToastItem) => void;
 const subscribers = new Set<Subscriber>();
 
-/** グローバル関数: どこからでも呼べる */
+/**
+ * どこからでも呼べる発火関数。
+ * ToastProvider がマウントされていれば、その購読者へ通知される。
+ */
 export function showToast(input: { type: ToastType; message: string; duration?: number }) {
     const toast: ToastItem = {
         id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -27,29 +34,37 @@ export function showToast(input: { type: ToastType; message: string; duration?: 
     subscribers.forEach((fn) => fn(toast));
 }
 
-/** Provider: 実際の描画担当。アプリのどこか1回だけ置く */
+// ------------------------------------------------------------
+// Provider（画面右下にトースト群を描画）
+// ------------------------------------------------------------
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
     const [toasts, setToasts] = useState<ToastItem[]>([]);
-    const timers = useRef<Map<string, number>>(new Map());
+    const timers = useRef<Map<string, number>>(new Map()); // id -> timeoutId
 
     useEffect(() => {
+        // サブスクライブして、新規トーストをキューへ追加
         const handler: Subscriber = (t) => {
             setToasts((prev) => [...prev, t]);
+
+            // 自動クローズ用タイマーをセット
             const id = window.setTimeout(() => {
                 setToasts((prev) => prev.filter((x) => x.id !== t.id));
                 timers.current.delete(t.id);
             }, t.duration ?? 3000);
             timers.current.set(t.id, id);
         };
+
         subscribers.add(handler);
         return () => {
+            // クリーンアップ（購読解除 & タイマー解除）
             subscribers.delete(handler);
-            // 後片付け
             timers.current.forEach((id) => clearTimeout(id));
             timers.current.clear();
         };
     }, []);
 
+    // 明示的に閉じる
     function remove(id: string) {
         const timer = timers.current.get(id);
         if (timer) {
@@ -59,6 +74,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         setToasts((prev) => prev.filter((t) => t.id !== id));
     }
 
+    // 種別ごとの色（見た目のみ／動作変更なし）
     function colorClasses(t: ToastItem) {
         switch (t.type) {
             case 'success':
@@ -75,18 +91,16 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     return (
         <>
             {children}
-            {/* 画面右下にスタック */}
+            {/* 右下スタック。pointer-events は個別要素で有効化 */}
             <div className="pointer-events-none fixed bottom-4 right-4 z-[1000] flex w-full max-w-sm flex-col gap-2">
                 {toasts.map((t) => (
                     <div
                         key={t.id}
-                        className={`pointer-events-auto flex items-start gap-3 rounded-xl border p-3 shadow-lg transition-all ${colorClasses(
-                            t
-                        )}`}
+                        className={`pointer-events-auto flex items-start gap-3 rounded-xl border p-3 shadow-lg transition-all ${colorClasses(t)}`}
                         role="status"
-                        aria-live="polite"
+                        aria-live="polite" // 重要度は控えめ。error等でも動作は変えない（仕様を維持）
                     >
-                        <div className="mt-[2px] text-lg leading-none">
+                        <div className="mt-[2px] text-lg leading-none" aria-hidden>
                             {t.type === 'success' ? '✅' : t.type === 'error' ? '⚠️' : t.type === 'warning' ? '🟠' : 'ℹ️'}
                         </div>
                         <div className="flex-1 text-sm">{t.message}</div>

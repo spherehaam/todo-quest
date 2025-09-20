@@ -10,29 +10,30 @@ import {
     setAccessCookie,
     setRefreshCookie,
     setCsrfCookie,
-    hashToken
+    hashToken,
 } from './common';
 
+/**
+ * ログイン API リクエストボディ
+ */
 type LoginBody = {
     email?: string;
     password?: string;
 };
 
 /**
- * ログイン処理
- * 1) 入力バリデーション
- * 2) ユーザー検索（メール一致）
- * 3) パスワード照合（bcrypt）
- * 4) セッション行を作成して ID を取得
- * 5) リフレッシュトークン作成（jti = セッションID）、ハッシュをDB保存
- * 6) アクセス/リフレッシュ/CSRF の各Cookieをセット
- * 7) 結果を返却
+ * POST /api/login ハンドラ
+ * 1) JSON ボディの検証
+ * 2) ユーザー検索（メールアドレスは小文字に正規化）
+ * 3) パスワードハッシュ検証（bcrypt）
+ * 4) セッション作成（refresh トークンのハッシュを保存）
+ * 5) アクセス/リフレッシュ/CSRF の各 Cookie を設定
  *
- * ※ エラーレスポンスはユーザー列挙対策のため極力同一メッセージ/コードに統一
+ * ※ 処理内容は変更せず、コメントと整形のみ
  */
 export async function handleLogin(req: Request) {
     try {
-        // --- 入力のパースと軽いバリデーション ---
+        // --- 1) JSON ボディの検証 ---
         let body: LoginBody;
         try {
             body = (await req.json()) as LoginBody;
@@ -40,7 +41,6 @@ export async function handleLogin(req: Request) {
             return NextResponse.json({ ok: false, error: 'invalid_json' }, { status: 400 });
         }
 
-        // メールは大文字/空白を正規化（DBがCITEXTでない場合の一致性担保）
         const email = (body.email ?? '').trim().toLowerCase();
         const password = body.password ?? '';
 
@@ -48,7 +48,7 @@ export async function handleLogin(req: Request) {
             return NextResponse.json({ ok: false, error: 'missing_fields' }, { status: 400 });
         }
 
-        // --- ユーザーの取得 ---
+        // --- 2) ユーザー検索 ---
         type UserRow = { id: string; email: string; password_hash: string };
         const rows = (await sql`
             SELECT id, email, password_hash
@@ -57,20 +57,20 @@ export async function handleLogin(req: Request) {
             LIMIT 1
         `) as UserRow[];
 
-        // 同一メッセージにすることでユーザー列挙を抑止
         if (rows.length === 0) {
             return NextResponse.json({ ok: false, error: 'invalid_credentials' }, { status: 401 });
         }
 
         const user = rows[0];
 
-        // --- パスワード照合 ---
+        // --- 3) パスワードハッシュ検証 ---
         const ok = await bcrypt.compare(password, user.password_hash);
         if (!ok) {
             return NextResponse.json({ ok: false, error: 'invalid_credentials' }, { status: 401 });
         }
 
-        // --- セッション作成 & トークン発行 ---
+        // --- 4) セッション作成 ---
+        // ひとまず仮の refresh_hash='temp' で行を作成→トークン生成後にハッシュ更新
         type InsertedRow = { id: string };
         const inserted = (await sql`
             INSERT INTO sessions (user_id, refresh_hash, expires_at)
@@ -80,11 +80,11 @@ export async function handleLogin(req: Request) {
 
         const sessionId = inserted[0].id;
 
-        // Step2: Access/Refresh トークンを発行
+        // JWT を発行（access/refresh）
         const access = await signAccessToken({ id: user.id, email: user.email });
         const refresh = await signRefreshToken({ id: user.id, email: user.email }, sessionId);
 
-        // Step3: refresh のハッシュを保存
+        // refresh のハッシュを DB に保存
         const refreshHash = hashToken(refresh);
         await sql`
             UPDATE sessions
@@ -92,10 +92,10 @@ export async function handleLogin(req: Request) {
             WHERE id = ${sessionId}
         `;
 
-        // CSRFトークン生成（32バイトランダム値）
+        // CSRF トークンは 32byte ランダム（16進）
         const csrf = crypto.randomBytes(32).toString('hex');
 
-        // --- Cookie セット & レスポンス ---
+        // --- 5) Cookie 設定 & 成功レスポンス ---
         const res = NextResponse.json({ ok: true, email: user.email });
         setAccessCookie(res, access);
         setRefreshCookie(res, refresh);

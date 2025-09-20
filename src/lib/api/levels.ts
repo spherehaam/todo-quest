@@ -7,19 +7,18 @@ import {
     verifyAccess,
 } from '@/lib/auth/common';
 
-/** Levels テーブルの型定義 */
+// --- DB レコード型 ---
 type LevelRow = {
-    level: number;
-    required_total_exp: number;
-    rewards_note: string | null;
+    level: number;                // レベル値
+    required_total_exp: number;   // 累計必要 EXP
+    rewards_note: string | null;  // 特典メモ（null 可）
 };
 
-/** 認証系の応答はキャッシュさせない */
+// 認証系の応答はキャッシュ禁止
 const NO_STORE = { 'Cache-Control': 'no-store' as const };
 
 /**
- * DBから特定レベルの情報を1件取得する
- * @param level 取得対象のレベル
+ * DB から指定 level のレコードを1件取得
  */
 async function dbGetLevels(level: number): Promise<LevelRow[]> {
     const rows = await sql`
@@ -32,13 +31,15 @@ async function dbGetLevels(level: number): Promise<LevelRow[]> {
 }
 
 /**
- * GET /api/levels?level=1
- * - 認証必須
- * - 指定されたレベルの情報を返す
+ * GET /api/levels ハンドラ
+ * 1) Cookie から access を取得し検証
+ * 2) query param `levels` を数値化
+ * 3) levels テーブルから1件取得
+ * 4) JSON 応答（キャッシュ禁止ヘッダ付き）
  */
 export async function handleGetLevels(req: Request) {
     try {
-        // アクセストークンをCookieから読み込み
+        // --- 1) 認証チェック ---
         const token = await readAccessTokenFromCookie();
         if (!token) {
             return NextResponse.json(
@@ -46,15 +47,11 @@ export async function handleGetLevels(req: Request) {
                 { status: 401, headers: NO_STORE }
             );
         }
-
-        // トークンの検証
         await verifyAccess(token);
 
-        // クエリパラメータから level を取得
+        // --- 2) パラメータ検証 ---
         const { searchParams } = new URL(req.url);
         const levelParam = searchParams.get('levels');
-
-        // パラメータ未指定 or 数値変換失敗なら 400
         const level = Number(levelParam);
         if (!levelParam || Number.isNaN(level)) {
             return NextResponse.json(
@@ -63,7 +60,7 @@ export async function handleGetLevels(req: Request) {
             );
         }
 
-        // DBから指定レベルを取得
+        // --- 3) DB 取得 ---
         const levelData = await dbGetLevels(level);
         if (!levelData) {
             return NextResponse.json(
@@ -72,6 +69,7 @@ export async function handleGetLevels(req: Request) {
             );
         }
 
+        // --- 4) 成功応答 ---
         return NextResponse.json(
             { ok: true, levels: levelData },
             { status: 200, headers: NO_STORE }

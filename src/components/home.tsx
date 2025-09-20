@@ -4,23 +4,25 @@ import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { showToast } from '@/components/toast';
 
-/** ステータス型 */
+/** ステータス種別 */
 type TaskStatus = 'open' | 'in_progress' | 'done';
 
+/** タスク型（APIスキーマ準拠） */
 type Task = {
     id: string;
     title: string;
     description?: string;
-    due_date?: string; // APIが date 文字列（YYYY-MM-DD）を想定するならその形式
+    due_date?: string; // YYYY-MM-DD 期待
     status: TaskStatus;
     created_at: string;
     contractor?: string;
     reward?: number;
 };
 
-/** 新規作成ペイロード（id/created_at はサーバー側で付与） */
+/** 新規作成ペイロード（id/created_at はサーバ側付与） */
 type NewTaskPayload = Omit<Task, 'id' | 'created_at'>;
 
+/** ユーザー型（必要項目のみ） */
 type Users = {
     id: string;
     username?: string;
@@ -28,11 +30,8 @@ type Users = {
     exp?: number;
 };
 
-type RewardApplied = {
-    added: number;      // 加算されたEXP（= tasks.reward）
-    newLevel: number;   // 更新後レベル
-    newExp: number;     // 更新後EXP（次レベルまでの内部EXP）
-};
+/** ステータス更新成功レスポンス */
+type RewardApplied = { added: number; newLevel: number; newExp: number };
 
 type UpdateStatusSuccess = {
     ok: true;
@@ -40,6 +39,7 @@ type UpdateStatusSuccess = {
     rewardApplied: RewardApplied | null;
 };
 
+/** JSON を安全にパース（失敗時 null） */
 function parseJsonSafe<T>(res: Response): Promise<T | null> {
     return res
         .json()
@@ -47,7 +47,7 @@ function parseJsonSafe<T>(res: Response): Promise<T | null> {
         .catch(() => null);
 }
 
-/** クッキー取得（URLエンコードを考慮して decode） */
+/** Cookie 読み取り（URLデコード込み） */
 function readCookie(name: string) {
     const raw = document.cookie
         .split('; ')
@@ -56,10 +56,7 @@ function readCookie(name: string) {
     return raw ? decodeURIComponent(raw) : undefined;
 }
 
-/**
- * Dateオブジェクト → YYYY-MM-DD（ローカル日付）のヘルパー
- * - サーバーが date 型（時刻なし）を期待するケースに合わせる
- */
+/** Date → YYYY-MM-DD（ローカル） */
 function toYmdLocal(d: Date): string {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -67,7 +64,7 @@ function toYmdLocal(d: Date): string {
     return `${y}-${m}-${day}`;
 }
 
-/** 日付のみ表示（ローカル）。不正値は '-' 表示 */
+/** YYYY-MM-DD or ISO → ローカル日付文字列（失敗時 '-'） */
 function fmtDateOnly(input?: string | null): string {
     if (!input) return '-';
     const d = new Date(input);
@@ -75,7 +72,7 @@ function fmtDateOnly(input?: string | null): string {
     return d.toLocaleDateString();
 }
 
-/** 期限文字列(YYYY-MM-DD) → Date（ローカル） */
+/** YYYY-MM-DD → Date（ローカル起点） */
 function parseDueDateLocal(ymd?: string): Date | null {
     if (!ymd) return null;
     const [y, m, d] = ymd.split('-').map((v) => parseInt(v, 10));
@@ -84,14 +81,17 @@ function parseDueDateLocal(ymd?: string): Date | null {
     return isNaN(dt.getTime()) ? null : dt;
 }
 
+/** ステータスの表示ラベル */
 const STATUS_LABEL: Record<TaskStatus, string> = {
     open: '未完了',
     in_progress: '進行中',
     done: '完了',
 };
 
+/** 全ステータス配列（セレクト用） */
 const ALL_STATUSES: TaskStatus[] = ['open', 'in_progress', 'done'];
 
+/** HTTP エラー（コードとステータスを保持） */
 class HttpError extends Error {
     code: string;
     status: number;
@@ -103,7 +103,11 @@ class HttpError extends Error {
     }
 }
 
-/** ステータス更新API（成功時は updated と rewardApplied を返す） */
+/**
+ * ステータス更新 API 呼び出し
+ * - PATCH /api/tasks/status
+ * - 失敗時は HttpError を投げる
+ */
 async function updateTaskStatus(taskId: string, next: TaskStatus): Promise<UpdateStatusSuccess> {
     const res = await fetch(`/api/tasks/status`, {
         method: 'PATCH',
@@ -115,16 +119,13 @@ async function updateTaskStatus(taskId: string, next: TaskStatus): Promise<Updat
         body: JSON.stringify({ taskId, status: next }),
     });
 
-    // 失敗系はエラーコードを含めた例外にする
     if (!res.ok) {
-        const json = await parseJsonSafe<{ ok:false; error:string; detail?:string }>(res);
+        const json = await parseJsonSafe<{ ok: false; error: string; detail?: string }>(res);
         const text = !json ? await res.text().catch(() => '') : '';
         const message = ((json?.error ?? text) || `Failed (${res.status})`) + (json?.detail ? `: ${json.detail}` : '');
         throw new HttpError(message, json?.error ?? 'unknown_error', res.status);
     }
 
-
-    // 成功: { ok:true, updated, rewardApplied } を期待
     const json = (await parseJsonSafe<UpdateStatusSuccess>(res)) as UpdateStatusSuccess | null;
     if (!json || !json.ok || !json.updated) {
         const text = !json ? await res.text().catch(() => '') : '';
@@ -134,7 +135,7 @@ async function updateTaskStatus(taskId: string, next: TaskStatus): Promise<Updat
     return json;
 }
 
-/** 「期限切れ かつ 未完了（done 以外）」判定 */
+/** 期限切れかつ未完了か */
 function isOverdueAndNotDone(t: Task): boolean {
     if (t.status === 'done') return false;
     const due = parseDueDateLocal(t.due_date);
@@ -144,10 +145,7 @@ function isOverdueAndNotDone(t: Task): boolean {
     return due < today;
 }
 
-/**
- * ステータスのインライン編集セル
- * - 先にローカル更新し、API失敗時に onRevert で戻す（楽観UI + ロールバック）
- */
+/** ステータスセル（インライン編集可能） */
 function StatusCell(props: {
     taskId: string;
     value: TaskStatus;
@@ -171,14 +169,13 @@ function StatusCell(props: {
         }
         const prev = value;
 
-        // 楽観更新 → API → 失敗時ロールバック
-        onLocalChange(next);
+        onLocalChange(next); // 楽観的更新
         setSaving(true);
         try {
             await updateTaskStatus(taskId, next);
             showToast({ type: 'success', message: 'ステータスを更新しました。' });
         } catch (err) {
-            onRevert(prev);
+            onRevert(prev); // ロールバック
             console.error(err);
             showToast({ type: 'error', message: 'ステータスの更新に失敗しました。' });
         } finally {
@@ -221,7 +218,7 @@ function StatusCell(props: {
     );
 }
 
-/** タスクテーブルのスケルトン */
+/** タスク一覧テーブルのスケルトン */
 function SkeletonTable() {
     return (
         <section className="rounded-2xl border border-gray-200 bg-white p-0 dark:border-gray-800 dark:bg-gray-900">
@@ -256,16 +253,11 @@ function SkeletonTable() {
     );
 }
 
-/** 期限フィルタ種別（再検索せず表示のみ絞る） */
+/** 期限フィルタ種別 */
 type DueFilter = 'all' | 'no_due' | 'overdue' | 'today' | 'this_week' | 'this_month' | 'range';
 
-/** モーダル（小さめのダイアログ） */
-function Modal(props: {
-    open: boolean;
-    onClose: () => void;
-    title: string;
-    children: React.ReactNode;
-}) {
+/** シンプルなモーダル（外側クリック/Escapeで閉じる） */
+function Modal(props: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
     const { open, onClose, title, children } = props;
     const overlayRef = useRef<HTMLDivElement | null>(null);
 
@@ -293,7 +285,6 @@ function Modal(props: {
             aria-modal="true"
             aria-label={title}
             onMouseDown={(e) => {
-                // オーバーレイクリックで閉じる（中身クリックは閉じない）
                 if (e.target === overlayRef.current) onClose();
             }}
         >
@@ -314,9 +305,7 @@ function Modal(props: {
     );
 }
 
-/** 新規タスク作成モーダル（内容）
- *  titleInputRef の型を広げて、MutableRefObject<HTMLInputElement | null> も受け取れるようにする
- */
+/** 新規作成モーダル（Cmd/Ctrl+Enter 送信対応） */
 function CreateTaskModal({
     open,
     onClose,
@@ -347,7 +336,6 @@ function CreateTaskModal({
     titleInputRef: React.Ref<HTMLInputElement>;
     msg: string;
 }) {
-    // textarea で Cmd/Ctrl+Enter 送信
     const onDetailsKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
             e.preventDefault();
@@ -355,7 +343,6 @@ function CreateTaskModal({
         }
     };
 
-    // 入力エラーを即時ガイド（必要に応じ）
     useEffect(() => {
         if (open && newTitle.trim() === '' && msg) {
             showToast({ type: 'warning', message: msg, duration: 2500 });
@@ -364,9 +351,7 @@ function CreateTaskModal({
 
     return (
         <Modal open={open} onClose={onClose} title="新規タスクの作成">
-            {/* 入力フォーム（縦積み） */}
             <div className="space-y-3">
-                {/* タイトル */}
                 <div className="space-y-1">
                     <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">タイトル *</label>
                     <input
@@ -378,7 +363,6 @@ function CreateTaskModal({
                     />
                 </div>
 
-                {/* 詳細 */}
                 <div className="space-y-1">
                     <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">詳細（任意）</label>
                     <textarea
@@ -391,7 +375,6 @@ function CreateTaskModal({
                     />
                 </div>
 
-                {/* ステータス */}
                 <div className="space-y-1">
                     <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">ステータス</label>
                     <select
@@ -405,7 +388,6 @@ function CreateTaskModal({
                     </select>
                 </div>
 
-                {/* 期日 */}
                 <div className="space-y-1">
                     <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">期限（任意）</label>
                     <input
@@ -417,7 +399,6 @@ function CreateTaskModal({
                 </div>
             </div>
 
-            {/* アクション */}
             <div className="mt-4 flex items-center justify-end gap-2">
                 <button
                     onClick={onClose}
@@ -437,12 +418,20 @@ function CreateTaskModal({
     );
 }
 
+/**
+ * ホームページ（タスク一覧 & 作成）
+ * - 初期化: /api/me → /api/users → /api/tasks
+ * - フィルタ: ステータス/期限/範囲
+ * - ステータスはセル内でインライン編集可能
+ *
+ * ※ 処理は変更せず、コメントと整形のみ
+ */
 export default function HomePage() {
     const [email, setEmail] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [tasks, setTasks] = useState<Task[]>([]);
 
-    // === 新規作成フォーム（モーダル内） ===
+    // 作成フォーム
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
     const [newDueLocal, setNewDueLocal] = useState(''); // YYYY-MM-DD
@@ -452,27 +441,27 @@ export default function HomePage() {
     const [users, setUsers] = useState<Users[]>([]);
     const router = useRouter();
 
-    // === 絞り込み（再検索なし） ===
+    // フィルタ状態
     const [statusFilter, setStatusFilter] = useState<'all' | 'not_done' | TaskStatus>('not_done');
     const [dueFilter, setDueFilter] = useState<DueFilter>('all');
     const [rangeFrom, setRangeFrom] = useState<string>(''); // YYYY-MM-DD
     const [rangeTo, setRangeTo] = useState<string>('');     // YYYY-MM-DD
 
-    // === モーダル開閉 ===
+    // モーダル
     const [isCreateOpen, setCreateOpen] = useState(false);
     const titleInputRef = useRef<HTMLInputElement>(null);
 
+    // モーダルオープン時にタイトルへフォーカス
     useEffect(() => {
         if (isCreateOpen) {
-            // 少し遅らせてフォーカス
             setTimeout(() => titleInputRef.current?.focus(), 0);
         }
     }, [isCreateOpen]);
 
+    // 初期化（認証→ユーザー→タスク）
     useEffect(() => {
         async function bootstrap() {
             try {
-                // 1) 自分情報
                 const meRes = await fetch('/api/me', { credentials: 'include' });
                 if (!meRes.ok) {
                     showToast({ type: 'warning', message: 'ログインが必要です。' });
@@ -482,10 +471,8 @@ export default function HomePage() {
                 const me = await meRes.json();
                 setEmail(me.email);
 
-                // 2) ユーザー一覧
                 const usersFetched = await fetchUsers();
 
-                // 3) 先頭ユーザーのタスク取得
                 if (usersFetched.length > 0) {
                     await fetchTasks(usersFetched[0].id);
                 }
@@ -500,9 +487,7 @@ export default function HomePage() {
         }
 
         async function fetchTasks(contractor?: string) {
-            const url = contractor
-                ? `/api/tasks?contractor=${encodeURIComponent(contractor)}`
-                : `/api/tasks`;
+            const url = contractor ? `/api/tasks?contractor=${encodeURIComponent(contractor)}` : `/api/tasks`;
             try {
                 const res = await fetch(url, { credentials: 'include' });
                 if (res.ok) {
@@ -542,7 +527,7 @@ export default function HomePage() {
         bootstrap();
     }, [router]);
 
-    /** 新規タスク追加（CSRF付与、成功でモーダル閉じ） */
+    /** タスク追加（POST /api/tasks） */
     const addTask = useCallback(async () => {
         const title = newTitle.trim();
         if (!title) {
@@ -571,6 +556,7 @@ export default function HomePage() {
             payload.contractor = users[0].id;
         }
 
+        // 報酬は固定値（仕様どおり）
         payload.reward = 100;
 
         try {
@@ -578,22 +564,21 @@ export default function HomePage() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-CSRF-Token': csrf
+                    'X-CSRF-Token': csrf,
                 },
                 credentials: 'include',
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
             });
 
             const data = await res.json().catch(() => ({}));
             if (res.ok) {
                 setTasks((prev) => [data.task as Task, ...prev]);
-                // 入力リセット＆モーダル閉じる
                 setNewTitle('');
                 setNewDescription('');
                 setNewDueLocal('');
                 setNewStatus('open');
                 setMsg('');
-                setCreateOpen(false); // 成功で閉じる
+                setCreateOpen(false);
                 showToast({ type: 'success', message: 'タスクを追加しました。' });
             } else {
                 const m = `追加に失敗: ${data.error ?? 'unknown error'}`;
@@ -608,16 +593,16 @@ export default function HomePage() {
         }
     }, [newTitle, newDescription, newDueLocal, newStatus, users]);
 
-    // 期限フィルタ（表示のみ）
+    /** フィルタ後のタスクリストを算出 */
     const filteredTasks = useMemo(() => {
-        // 今日・週・月の境界（ローカル）
         const now = new Date();
         const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         const endOfToday = new Date(today);
         endOfToday.setHours(23, 59, 59, 999);
 
+        // 月曜始まりの今週
         const startOfWeek = new Date(today);
-        const day = startOfWeek.getDay() || 7; // 月曜始まり
+        const day = startOfWeek.getDay() || 7;
         startOfWeek.setDate(startOfWeek.getDate() - (day - 1));
         const endOfWeek = new Date(startOfWeek);
         endOfWeek.setDate(endOfWeek.getDate() + 6);
@@ -627,6 +612,7 @@ export default function HomePage() {
         const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
         endOfMonth.setHours(23, 59, 59, 999);
 
+        // 期間指定
         const rangeStart = parseDueDateLocal(rangeFrom);
         const rangeEndBase = parseDueDateLocal(rangeTo);
         const rangeEnd = rangeEndBase
@@ -634,11 +620,11 @@ export default function HomePage() {
             : null;
 
         return tasks.filter((t) => {
-            // ステータスフィルタ
+            // ステータス条件
             if (statusFilter === 'not_done' && t.status === 'done') return false;
             if (statusFilter !== 'all' && statusFilter !== 'not_done' && t.status !== statusFilter) return false;
 
-            // 期限フィルタ
+            // 期限条件
             const due = parseDueDateLocal(t.due_date);
             switch (dueFilter) {
                 case 'all':
@@ -665,7 +651,7 @@ export default function HomePage() {
         });
     }, [tasks, statusFilter, dueFilter, rangeFrom, rangeTo]);
 
-    // 範囲選択モード解除で日付クリア
+    // 期間指定以外を選ぶと日付入力をクリア
     useEffect(() => {
         if (dueFilter !== 'range') {
             setRangeFrom('');
@@ -673,21 +659,16 @@ export default function HomePage() {
         }
     }, [dueFilter]);
 
-    // ===== Homeページのメイン内容（サイドバー・外枠はレイアウト側で共通化） =====
     return (
         <>
             {loading ? (
-                <>
-                    <SkeletonTable />
-                </>
+                <SkeletonTable />
             ) : (
                 <>
-                    {/* ====== タスク一覧（フィルタ + 新規ボタン） ====== */}
                     <section className="rounded-2xl border border-gray-200 bg-white p-0 dark:border-gray-800 dark:bg-gray-900">
                         <div className="flex flex-col gap-3 border-b border-gray-200 p-4 dark:border-gray-800 sm:flex-row sm:items-center sm:justify-between">
                             <h2 className="text-sm font-semibold">タスク一覧</h2>
 
-                            {/* 右側：フィルタと「新規」ボタン */}
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                                 {/* ステータスフィルタ */}
                                 <label className="flex items-center gap-2 text-xs sm:text-sm">
@@ -723,7 +704,7 @@ export default function HomePage() {
                                     </select>
                                 </label>
 
-                                {/* 範囲指定 */}
+                                {/* 期間指定入力 */}
                                 {dueFilter === 'range' && (
                                     <div className="flex items-center gap-2">
                                         <input
@@ -749,7 +730,7 @@ export default function HomePage() {
                                     {filteredTasks.length} / {tasks.length} 件
                                 </span>
 
-                                {/* モーダルを開くボタン（フィルタ群の右端） */}
+                                {/* 新規ボタン */}
                                 <button
                                     type="button"
                                     onClick={() => setCreateOpen(true)}
@@ -794,19 +775,13 @@ export default function HomePage() {
                                                         taskId={t.id}
                                                         value={t.status}
                                                         onLocalChange={(next) => {
-                                                            // 楽観更新：先にローカルを書き換える
                                                             setTasks((prev) =>
-                                                                prev.map((x) =>
-                                                                    x.id === t.id ? { ...x, status: next } : x
-                                                                )
+                                                                prev.map((x) => (x.id === t.id ? { ...x, status: next } : x))
                                                             );
                                                         }}
                                                         onRevert={(prevStatus) => {
-                                                            // 失敗時ロールバック：以前の値に戻す
                                                             setTasks((prev) =>
-                                                                prev.map((x) =>
-                                                                    x.id === t.id ? { ...x, status: prevStatus } : x
-                                                                )
+                                                                prev.map((x) => (x.id === t.id ? { ...x, status: prevStatus } : x))
                                                             );
                                                         }}
                                                     />
@@ -822,7 +797,7 @@ export default function HomePage() {
                 </>
             )}
 
-            {/* モーダル呼び出し */}
+            {/* 作成モーダル */}
             <CreateTaskModal
                 open={isCreateOpen}
                 onClose={() => setCreateOpen(false)}

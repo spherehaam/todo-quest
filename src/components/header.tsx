@@ -3,21 +3,30 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 
+/**
+ * ユーザー情報型
+ * - level/exp は存在しない場合に備えて Optional
+ */
 type Users = {
     id: string;
     username?: string;
     level?: number;
-    /** 累計EXPを想定（現在レベルの内部EXPではなくトータル） */
     exp?: number;
 };
 
+/**
+ * レベルマスタ行
+ * - required_total_exp はそのレベル到達に必要な「累計」EXP
+ */
 type LevelRow = {
     level: number;
-    required_total_exp: number; // 到達に必要な累計EXP
+    required_total_exp: number;
     rewards_note?: string | null;
 };
 
-/** クッキー取得（URLエンコードを考慮して decode） */
+/**
+ * Cookie の値を取得（URLデコード込み）
+ */
 function readCookie(name: string) {
     const raw = document.cookie
         .split('; ')
@@ -26,7 +35,9 @@ function readCookie(name: string) {
     return raw ? decodeURIComponent(raw) : undefined;
 }
 
-/** ヘッダー下のシマー */
+/**
+ * 細いプログレス用のシマーバー（スケルトン時にヘッダ下に表示）
+ */
 function ShimmerBar() {
     return (
         <div className="h-1 w-full overflow-hidden rounded-full bg-gradient-to-r from-indigo-100 via-blue-100 to-indigo-100 dark:from-indigo-900/40 dark:via-blue-900/40 dark:to-indigo-900/40">
@@ -41,18 +52,18 @@ function ShimmerBar() {
     );
 }
 
-/** ヘッダースケルトン（ロード中に表示） */
+/**
+ * ヘッダのスケルトン（初期ロード時に表示）
+ */
 function HeaderSkeleton() {
     return (
         <header className="sticky top-0 z-30 border-b border-gray-200/70 bg-white/80 backdrop-blur dark:border-gray-800 dark:bg-gray-900/70">
             <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-                {/* 左：ロゴ枠 */}
                 <div className="flex items-center gap-2">
                     <div className="h-7 w-7 rounded-lg bg-gray-200 dark:bg-gray-700 animate-pulse" />
                     <div className="h-3 w-24 rounded bg-gray-200 dark:bg-gray-700 animate-pulse" />
                 </div>
 
-                {/* 中央：レベル・EXPゲージ枠 */}
                 <div className="hidden sm:flex items-center gap-3">
                     <div className="flex flex-col">
                         <div className="flex items-center gap-2">
@@ -67,7 +78,6 @@ function HeaderSkeleton() {
                     </div>
                 </div>
 
-                {/* 右：ユーザー名／ボタン枠 */}
                 <div className="flex items-center gap-3">
                     <div className="hidden sm:inline h-3 w-24 rounded bg-gray-200 dark:bg-gray-700 animate-pulse" />
                     <div className="h-8 w-20 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 animate-pulse" />
@@ -84,10 +94,12 @@ function HeaderSkeleton() {
 }
 
 /**
- * グローバルヘッダー
- * - users[].exp は「累計EXP」を想定。
- * - 進捗 = (累計EXP - 前レベル閾値) / (次レベル閾値 - 前レベル閾値)
- * - 次レベル閾値が未取得でも「現在レベル閾値」を使って X / Y を表示
+ * アプリのグローバルヘッダ
+ * - /api/me でログイン判定 & email 表示
+ * - /api/users, /api/levels からレベル進捗バー用データを取得
+ * - ログアウトは /api/logout POST
+ *
+ * ※ 処理ロジックは変更せず、コメントと整形のみ
  */
 export default function Header() {
     const [email, setEmail] = useState<string | null>(null);
@@ -96,16 +108,16 @@ export default function Header() {
     const [levels, setLevels] = useState<LevelRow[]>([]);
     const router = useRouter();
 
-    // スケルトンの最低表示時間（ms）
+    /** スケルトンを最低限見せる時間（ms） */
     const MIN_SKELETON_MS = 400;
 
     useEffect(() => {
-        let mounted = true;
+        let mounted = true; // アンマウント後の setState 防止
 
         async function bootstrap() {
             const start = performance.now();
             try {
-                // 1) 自分情報
+                // 認証チェック & email 取得
                 const meRes = await fetch('/api/me', { credentials: 'include' });
                 if (!meRes.ok) {
                     router.push('/');
@@ -115,17 +127,17 @@ export default function Header() {
                 if (!mounted) return;
                 setEmail(me.email);
 
-                // 2) ユーザー一覧（levels 候補を取り出す）
+                // ユーザー一覧（levels 推定のためのレベル配列も受け取り）
                 const requestedLevels = await fetchUsers();
                 if (!mounted) return;
 
-                // 3) レベル定義（ユーザーAPIで得た levels を元にクエリ）
+                // レベルマスタ取得（必要レベルのみ指定）
                 await fetchLevels(requestedLevels);
                 if (!mounted) return;
             } catch (e) {
                 console.error('bootstrap failed:', e);
             } finally {
-                // 最低表示時間を確保してから loading を解除
+                // スケルトン最短表示時間の確保
                 const elapsed = performance.now() - start;
                 const remain = Math.max(0, MIN_SKELETON_MS - elapsed);
                 setTimeout(() => {
@@ -134,6 +146,10 @@ export default function Header() {
             }
         }
 
+        /**
+         * /api/users を取得して users state を更新。
+         * さらに、レベルマスタ取得に使うレベル配列を返す。
+         */
         async function fetchUsers(): Promise<number[]> {
             try {
                 const res = await fetch('/api/users', { credentials: 'include' });
@@ -145,6 +161,7 @@ export default function Header() {
                 const list: Users[] = data.users ?? [];
                 setUsers(list);
 
+                // API が直接レベル配列を返す場合はそれを利用。なければ users から推定。
                 const lvls: number[] = Array.isArray(data.levels)
                     ? (data.levels as number[]).map((v) => Number(v)).filter((v) => Number.isFinite(v))
                     : [];
@@ -162,6 +179,10 @@ export default function Header() {
             }
         }
 
+        /**
+         * /api/levels を取得して levels state を更新。
+         * - levelsFromUsers がある場合はクエリ指定して必要分だけ取得
+         */
         async function fetchLevels(levelsFromUsers: number[] = []): Promise<LevelRow[]> {
             try {
                 const params = new URLSearchParams();
@@ -188,7 +209,6 @@ export default function Header() {
             }
         }
 
-        // 初回マウント時は必ずスケルトン開始
         setLoading(true);
         bootstrap();
 
@@ -198,7 +218,8 @@ export default function Header() {
     }, [router]);
 
     /**
-     * ゲージ表示用の派生データ
+     * レベル進捗バーの描画用データを計算
+     * - users[0] を対象に、前レベル到達EXP〜次レベル到達EXPの区間で現在の割合を算出
      */
     const xpView = useMemo(() => {
         const u = users[0];
@@ -207,21 +228,21 @@ export default function Header() {
         const curLevel = Math.max(1, u.level ?? 1);
         const totalExp = Math.max(0, u.exp ?? 0);
 
-        // level -> required_total_exp のマップ
+        // level -> required_total_exp のルックアップ
         const byLevel = new Map<number, number>();
         for (const row of levels) {
             byLevel.set(row.level, row.required_total_exp);
         }
 
-        const prevReq = byLevel.get(curLevel - 1) ?? 0;
-        const curReqMaybe = byLevel.get(curLevel);
-        const nextReqMaybe = byLevel.get(curLevel + 1);
+        const prevReq = byLevel.get(curLevel - 1) ?? 0; // 前レベル到達の累計EXP
+        const curReqMaybe = byLevel.get(curLevel);      // 現レベル到達の累計EXP
+        const nextReqMaybe = byLevel.get(curLevel + 1); // 次レベル到達の累計EXP
 
-        const curReq = curReqMaybe ?? prevReq;
+        const curReq = curReqMaybe ?? prevReq;          // 現レベル不明時は prevReq と同値扱い
         const lvUpNeedRaw = (nextReqMaybe ?? curReq) - prevReq;
-        const lvUpNeed = Math.max(1, lvUpNeedRaw);
+        const lvUpNeed = Math.max(1, lvUpNeedRaw);      // 0除算回避
 
-        const inLevelRaw = totalExp - prevReq;
+        const inLevelRaw = totalExp - prevReq;          // レベル内獲得EXP
         const inLevel = Math.max(0, Math.min(lvUpNeed, inLevelRaw));
 
         const pct = Math.min(100, Math.max(0, (inLevel / lvUpNeed) * 100));
@@ -235,22 +256,26 @@ export default function Header() {
             nextReq: nextReqMaybe,
             inLevel,
             lvUpNeed,
-            pct
+            pct,
         };
     }, [users, levels]);
 
-    /** ログアウト：CSRF付与のうえトップへ */
+    /**
+     * ログアウト（/api/logout）
+     * - CSRF トークン付与
+     * - 成否に関わらずトップへ遷移
+     */
     const logout = useCallback(async () => {
         const csrf = readCookie('csrf_token') ?? '';
         await fetch('/api/logout', {
             method: 'POST',
             headers: { 'X-CSRF-Token': csrf },
-            credentials: 'include'
+            credentials: 'include',
         });
         router.push('/');
     }, [router]);
 
-    // ロード中はスケルトンを常に表示
+    // ローディング時はスケルトンを返す
     if (loading) {
         return <HeaderSkeleton />;
     }
@@ -258,16 +283,14 @@ export default function Header() {
     return (
         <header className="sticky top-0 z-30 border-b border-gray-200/70 bg-white/80 backdrop-blur dark:border-gray-800 dark:bg-gray-900/70">
             <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
+                {/* 左：ロゴ */}
                 <div className="flex items-center gap-2">
                     <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600" />
-                    <span className="text-sm font-semibold tracking-wide">
-                        TodoQuest
-                    </span>
+                    <span className="text-sm font-semibold tracking-wide">TodoQuest</span>
                 </div>
 
-                {/* ユーザー */}
+                {/* 中央：レベル進捗（sm 以上で表示） */}
                 <div className="flex items-center gap-4">
-                    {/* EXPバー（ユーザーが取得でき、かつレベル表があるときに表示） */}
                     {xpView && (
                         <div className="hidden sm:flex items-center gap-3">
                             <div className="flex flex-col">
@@ -299,7 +322,7 @@ export default function Header() {
                     )}
                 </div>
 
-                {/* ログアウト */}
+                {/* 右：ユーザー情報＆ログアウト */}
                 <div className="flex items-center gap-3">
                     <span className="hidden text-xs text-gray-500 dark:text-gray-400 sm:inline">
                         {email ?? 'Guest'}

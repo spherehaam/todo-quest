@@ -7,10 +7,7 @@ import {
     verifyAccess,
 } from '@/lib/auth/common';
 
-/**
- * users テーブルに対応する型
- * - 既存フロントが配列で受ける前提（users: Users[]）のため型名はそのままに
- */
+/** Users テーブルの最小スキーマ */
 type Users = {
     id: string;
     username: string;
@@ -18,15 +15,14 @@ type Users = {
     exp: number;
 };
 
-/** 認証系の応答はキャッシュさせない */
+/** 認証系レスポンスはキャッシュさせない */
 const NO_STORE = { 'Cache-Control': 'no-store' as const };
 
 /**
- * ログイン中ユーザー（1件）を取得
- * - フロント互換のため配列で返す（0 or 1 要素）
+ * DB から特定ユーザーを取得
+ * - id をキーに1件だけ返す
  */
 async function dbGetUsers(userId: string): Promise<Users[]> {
-
     const rows = await sql`
         SELECT id, username, level, exp
         FROM users
@@ -37,8 +33,9 @@ async function dbGetUsers(userId: string): Promise<Users[]> {
 }
 
 /**
- * GET /api/users
- * - 認証済みユーザー自身のレコード（最大1件）を配列で返す
+ * GET /api/users 用ハンドラ
+ * - 認証トークンを検証
+ * - ユーザー情報を返す
  */
 export async function handleGetUsers() {
     try {
@@ -49,14 +46,19 @@ export async function handleGetUsers() {
                 { status: 401, headers: NO_STORE }
             );
         }
+
+        // アクセストークンを検証してユーザーIDを取得
         const payload = await verifyAccess(token);
 
+        // DB からユーザー情報を取得
         const users = await dbGetUsers(String(payload.sub));
+
         return NextResponse.json(
             { ok: true, users },
             { status: 200, headers: NO_STORE }
         );
     } catch {
+        // 想定外エラーは 500
         return NextResponse.json(
             { ok: false, error: 'failed_to_fetch' },
             { status: 500, headers: NO_STORE }
@@ -65,12 +67,11 @@ export async function handleGetUsers() {
 }
 
 /**
- * POST /api/users
- * - 現状未サポート。将来的にプロフィール更新等を実装する場合はここに追加
- * - 明示的に 405 を返す（Allow ヘッダを付与）
+ * POST /api/users 用ハンドラ
+ * - まだ未実装のため 501 を返す
  */
 export async function handlePostUsers(req: Request) {
-    void req;
+    void req; // 未使用パラメータ警告を抑制
 
     return NextResponse.json(
         { ok: false, error: 'not_implemented' },
