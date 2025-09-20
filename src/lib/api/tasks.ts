@@ -440,15 +440,24 @@ export async function handlePatchTasksStatus(req: Request) {
             { ok: true, updated, rewardApplied: rewardApplied ?? null },
             { status: 200, headers: NO_STORE }
         );
-    } catch (e) {
-        const msg =
-            typeof e === 'object' && e && 'message' in e
-                ? String((e as any).message)
-                : '';
-        const isCsrf = msg === 'csrf_mismatch';
+    } catch (e: unknown) {
+        // unknown から安全に message / code を抽出
+        const extractError = (err: unknown): { message: string; code?: string } => {
+            if (typeof err === 'string') return { message: err };
+            if (err && typeof err === 'object') {
+                const r = err as Record<string, unknown>;
+                const message = typeof r.message === 'string' ? r.message : '';
+                const code = typeof r.code === 'string' ? r.code : undefined;
+                return { message, code };
+            }
+            return { message: '' };
+        };
+
+        const { message, code } = extractError(e);
+        const isCsrf = code === 'csrf_mismatch' || message === 'csrf_mismatch';
         const status = isCsrf ? 403 : 500;
         return NextResponse.json(
-            { ok: false, error: isCsrf ? 'csrf_mismatch' : 'update_failed', detail: msg },
+            { ok: false, error: isCsrf ? 'csrf_mismatch' : 'update_failed', detail: message },
             { status, headers: NO_STORE }
         );
     }

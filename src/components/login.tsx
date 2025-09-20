@@ -79,7 +79,6 @@ export default function Page() {
                 error?: string;
             };
 
-            // any 撤去。unknown→narrow でも可だが、ここでは期待スキーマに型付け
             let data: LoginResponse = {};
             try {
                 data = (await res.json()) as LoginResponse;

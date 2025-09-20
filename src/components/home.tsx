@@ -40,17 +40,6 @@ type UpdateStatusSuccess = {
     rewardApplied: RewardApplied | null;
 };
 
-type UpdateStatusError = {
-    ok: false;
-    error:
-        | 'no_auth'
-        | 'invalid_payload'
-        | 'not_found_or_noop'
-        | 'csrf_mismatch'
-        | 'update_failed'
-        | string; // 将来拡張
-};
-
 function parseJsonSafe<T>(res: Response): Promise<T | null> {
     return res
         .json()
@@ -103,6 +92,17 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 
 const ALL_STATUSES: TaskStatus[] = ['open', 'in_progress', 'done'];
 
+class HttpError extends Error {
+    code: string;
+    status: number;
+    constructor(message: string, code: string, status: number) {
+        super(message);
+        this.name = 'HttpError';
+        this.code = code;
+        this.status = status;
+    }
+}
+
 /** ステータス更新API（成功時は updated と rewardApplied を返す） */
 async function updateTaskStatus(taskId: string, next: TaskStatus): Promise<UpdateStatusSuccess> {
     const res = await fetch(`/api/tasks/status`, {
@@ -120,10 +120,7 @@ async function updateTaskStatus(taskId: string, next: TaskStatus): Promise<Updat
         const json = await parseJsonSafe<{ ok:false; error:string; detail?:string }>(res);
         const text = !json ? await res.text().catch(() => '') : '';
         const message = ((json?.error ?? text) || `Failed (${res.status})`) + (json?.detail ? `: ${json.detail}` : '');
-        const err = new Error(message);
-        (err as any).code = json?.error ?? 'unknown_error';
-        (err as any).status = res.status;
-        throw err;
+        throw new HttpError(message, json?.error ?? 'unknown_error', res.status);
     }
 
 
@@ -323,7 +320,6 @@ function Modal(props: {
 function CreateTaskModal({
     open,
     onClose,
-    email,
     newTitle,
     setNewTitle,
     newDescription,
