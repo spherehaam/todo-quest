@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
+import { showToast } from '@/components/toast'; // ★ 追加：どこからでも呼べるトースト
 
 /**
  * タスクの型。
@@ -38,28 +38,6 @@ function readCookie(name: string) {
         .find((row) => row.startsWith(name + '='))
         ?.split('=')[1];
     return raw ? decodeURIComponent(raw) : undefined;
-}
-
-/** ステータスの日本語ラベル化 */
-function labelOf(s: Task['status']): string {
-    switch (s) {
-        case 'open': return '募集中';
-        case 'in_progress': return '対応中';
-        case 'done': return '完了';
-        default: return s;
-    }
-}
-
-/** ステータスごとのバッジ用クラス */
-function badgeClass(s: Task['status']): string {
-    switch (s) {
-        case 'open':
-            return 'text-emerald-800 bg-emerald-50 ring-1 ring-emerald-200 dark:text-emerald-200 dark:bg-emerald-900/30 dark:ring-emerald-900';
-        case 'in_progress':
-            return 'text-amber-800 bg-amber-50 ring-1 ring-amber-200 dark:text-amber-200 dark:bg-amber-900/30 dark:ring-amber-900';
-        case 'done':
-            return 'text-slate-700 bg-slate-50 ring-1 ring-slate-200 dark:text-slate-200 dark:bg-slate-800/40 dark:ring-slate-800';
-    }
 }
 
 /** 小さなタグ用の共通クラス */
@@ -109,24 +87,113 @@ function SkeletonCard() {
     );
 }
 
-/** サイドバーのスケルトン */
-function SkeletonSidebar() {
+/** スケルトン最小表示時間(ms) */
+const MIN_SKELETON_MS = 450;
+
+/** 難易度を●で可視化（1〜5） */
+function DifficultyDots({ value }: { value: number }) {
+    const capped = Math.max(1, Math.min(5, Math.floor(value)));
     return (
-        <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
-            <div className="space-y-1">
-                <div className="px-2 pb-2">
-                    <div className="h-3 w-16 animate-pulse rounded bg-gray-200/80 dark:bg-gray-700/60" />
-                </div>
-                <div className="h-8 w-full animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
-                <div className="h-8 w-full animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
-                <div className="my-3 h-px w-full bg-dashed bg-[length:8px_1px] bg-left bg-repeat-x [background-image:linear-gradient(to_right,rgba(0,0,0,.15)_50%,transparent_0)] dark:[background-image:linear-gradient(to_right,rgba(255,255,255,.15)_50%,transparent_0)]" />
-            </div>
-        </aside>
+        <span aria-label={`難易度 ${capped}/5`} className="inline-flex items-center gap-0.5 align-middle">
+            {Array.from({ length: 5 }).map((_, i) => (
+                <span
+                    key={i}
+                    className={
+                        'inline-block h-2.5 w-2.5 rounded-full ring-1 ' +
+                        (i < capped
+                            ? 'bg-indigo-600 ring-indigo-700'
+                            : 'bg-gray-200 ring-gray-300 dark:bg-gray-700 dark:ring-gray-600')
+                    }
+                />
+            ))}
+        </span>
     );
 }
 
-/** スケルトン最小表示時間(ms) */
-const MIN_SKELETON_MS = 450;
+/** 1件分のカード */
+function TaskCard({
+    t,
+    meId,
+    onAccept,
+}: {
+    t: Task;
+    meId?: string | null;
+    onAccept: (id: string) => void;
+}) {
+    return (
+        <li className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition hover:shadow-md dark:border-gray-800 dark:bg-gray-900/60">
+            {/* Hoverアクセント */}
+            <div className="pointer-events-none absolute inset-0 opacity-0 transition group-hover:opacity-100">
+                <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/0 via-indigo-500/5 to-indigo-500/0" />
+            </div>
+
+            <div className="relative z-10 grid gap-3 sm:grid-cols-[1fr,auto] sm:items-start">
+                {/* 左：本文 */}
+                <div className="min-w-0">
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                        <h3 className="m-0 truncate text-lg font-semibold tracking-tight">{t.title}</h3>
+                    </div>
+
+                    {t.description && (
+                        <div className="mb-2">
+                            <p className="whitespace-pre-wrap text-sm leading-6 text-gray-800 dark:text-gray-200">
+                                {t.description}
+                            </p>
+                        </div>
+                    )}
+
+                    <div className="my-3 h-px w-full bg-gradient-to-r from-transparent via-gray-200 to-transparent dark:via-gray-700" />
+
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className={pillClass()}>
+                            <span className="text-gray-500 dark:text-gray-400">依頼者</span>
+                            <span className="ml-1 font-semibold">{t.owner_username ?? '不明'}</span>
+                        </span>
+
+                        {typeof t.difficulty === 'number' && (
+                            <span className={pillClass()}>
+                                <span className="text-gray-500 dark:text-gray-400">難易度</span>
+                                <span className="ml-1 inline-flex items-center gap-1 font-semibold">
+                                    <DifficultyDots value={t.difficulty} />
+                                    <span className="tabular-nums">{t.difficulty}/5</span>
+                                </span>
+                            </span>
+                        )}
+
+                        {typeof t.reward === 'number' && (
+                            <span className={pillClass()}>
+                                <span className="text-gray-500 dark:text-gray-400">報酬</span>
+                                <span className="ml-1 font-semibold">{t.reward}exp</span>
+                            </span>
+                        )}
+
+                        {t.due_date && (
+                            <span className={pillClass()}>
+                                <span className="text-gray-500 dark:text-gray-400">期日</span>
+                                <span className="ml-1 font-semibold">
+                                    {new Date(t.due_date).toLocaleDateString('ja-JP')}
+                                </span>
+                            </span>
+                        )}
+                    </div>
+                </div>
+
+                {/* 右：アクション */}
+                <div className="flex min-w-[220px] flex-col gap-2">
+                    <button
+                        className="rounded-xl border border-indigo-600 bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:translate-y-px disabled:opacity-60 disabled:saturate-50"
+                        onClick={() => onAccept(t.id)}
+                        disabled={!meId}
+                        aria-disabled={!meId}
+                        title={!meId ? 'ユーザー情報取得中' : 'このタスクを受注する'}
+                    >
+                        受注する
+                    </button>
+                </div>
+            </div>
+        </li>
+    );
+}
 
 /**
  * タスク掲示板ページ（クライアントコンポーネント）
@@ -169,9 +236,7 @@ export default function BbsPage() {
         const ac = new AbortController();
         let hideTimer: number | null = null;
 
-        /**
-         * Abort によるキャンセルかどうか判定するユーティリティ
-         */
+        /** Abort によるキャンセルかどうか判定 */
         function isAbortError(value: unknown): boolean {
             if (value instanceof DOMException && value.name === 'AbortError') return true;
             if (typeof value === 'string') return value === 'component_unmounted';
@@ -182,9 +247,7 @@ export default function BbsPage() {
             return false;
         }
 
-        /**
-         * fetch をラップして、中断は正常終了扱いにする
-         */
+        /** fetch をラップ（中断は正常終了扱い） */
         async function safeFetch(input: RequestInfo | URL, init?: RequestInit) {
             try {
                 return await fetch(input, { ...init, signal: ac.signal });
@@ -201,6 +264,7 @@ export default function BbsPage() {
                 const res = await safeFetch('/api/me', { credentials: 'include' });
                 if (!res) return;
                 if (!res.ok) {
+                    showToast({ type: 'warning', message: 'ログインが必要です。' });
                     const elapsed = performance.now() - start;
                     const rest = Math.max(0, MIN_SKELETON_MS - elapsed);
                     hideTimer = window.setTimeout(() => {
@@ -212,16 +276,19 @@ export default function BbsPage() {
                 const me: Me = await res.json();
                 setMe(me);
 
+                // 掲示板タスク
                 const tRes = await safeFetch('/api/tasks/bbs', { credentials: 'include' });
                 if (tRes && tRes.ok) {
                     const json = await tRes.json();
                     setTasks(json.tasks ?? []);
                 } else {
                     setTasks([]);
+                    showToast({ type: 'error', message: 'タスク一覧の取得に失敗しました。' });
                 }
             } catch (e) {
                 console.error('[bbs] bootstrap failed:', e); // ネットワーク等の本当の失敗だけを記録
                 setTasks([]);
+                showToast({ type: 'error', message: '初期化中にエラーが発生しました。' });
             } finally {
                 const elapsed = performance.now() - start;
                 const rest = Math.max(0, MIN_SKELETON_MS - elapsed);
@@ -238,7 +305,6 @@ export default function BbsPage() {
         };
     }, [router]);
 
-
     /**
      * 新規タスクの作成（モーダルから送信）
      * - 必須: title、ユーザーID（me.id）
@@ -248,11 +314,11 @@ export default function BbsPage() {
     const addTaskFromModal = useCallback(async () => {
         const trimmedTitle = title.trim();
         if (!trimmedTitle) {
-            alert('タイトルは必須です');
+            showToast({ type: 'warning', message: 'タイトルは必須です' });
             return;
         }
         if (!me?.id) {
-            alert('ユーザー情報取得に失敗しました。再度ログインしてください。');
+            showToast({ type: 'error', message: 'ユーザー情報取得に失敗しました。再度ログインしてください。' });
             return;
         }
 
@@ -278,7 +344,7 @@ export default function BbsPage() {
                 body: JSON.stringify(payload),
             });
 
-            const data = await res.json();
+            const data = await res.json().catch(() => ({}));
             if (res.ok) {
                 setTasks((prev) => [data.task as Task, ...prev]); // 先頭に挿入
                 setTitle('');
@@ -287,11 +353,12 @@ export default function BbsPage() {
                 setDifficulty(1);
                 setReward('');
                 setOpen(false);
+                showToast({ type: 'success', message: '依頼を投稿しました。' });
             } else {
-                alert(data?.error ?? '作成に失敗しました');
+                showToast({ type: 'error', message: data?.error ?? '作成に失敗しました' });
             }
         } catch {
-            alert('通信エラーが発生しました');
+            showToast({ type: 'error', message: '通信エラーが発生しました' });
         }
     }, [title, description, dueDate, difficulty, reward, me?.id]);
 
@@ -303,7 +370,7 @@ export default function BbsPage() {
     const acceptTask = useCallback(async (id: string) => {
         const userId = me?.id;
         if (!userId) {
-            alert('ユーザー情報取得に失敗しました。再度ログインしてください。');
+            showToast({ type: 'warning', message: 'ユーザー情報取得中です。少し待ってからお試しください。' });
             return;
         }
 
@@ -333,8 +400,10 @@ export default function BbsPage() {
                     )
                 );
                 const err = await res.json().catch(() => ({}));
-                alert(err?.error ?? '受注に失敗しました');
+                showToast({ type: 'error', message: err?.error ?? '受注に失敗しました' });
+                return;
             }
+            showToast({ type: 'success', message: 'タスクを受注しました。' });
         } catch {
             // 通信エラー時ロールバック
             setTasks((prev) =>
@@ -342,7 +411,7 @@ export default function BbsPage() {
                     t.id === id ? { ...t, status: 'open', contractor: null } : t
                 )
             );
-            alert('通信エラーが発生しました');
+            showToast({ type: 'error', message: '通信エラーが発生しました' });
         }
     }, [me?.id]);
 
@@ -364,152 +433,49 @@ export default function BbsPage() {
     }, [open]);
 
     return (
-        <div className="min-h-screen bg-gradient-to-b from-white to-gray-50 text-gray-900 dark:from-gray-950 dark:to-gray-900 dark:text-gray-100">
+        <>
+            {/* 見出し */}
+            {loading ? <SkeletonHeaderRow /> : (
+                <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                        <h1 className="m-0 text-2xl font-semibold tracking-tight">タスク掲示板</h1>
+                    </div>
+                    <button
+                        onClick={() => setOpen(true)}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:translate-y-px"
+                    >
+                        依頼を投稿
+                    </button>
+                </div>
+            )}
 
-            <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 p-4 sm:grid-cols-[220px_minmax(0,1fr)]">
-                {/* サイドバー（ローディング時はスケルトン） */}
-                {loading ? (
-                    <SkeletonSidebar />
-                ) : (
-                    <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
-                        <nav className="space-y-1">
-                            <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                                メニュー
-                            </div>
-
-                            <Link
-                                href="/home"
-                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-                            >
-                                <span>📋</span> <span>ホーム</span>
-                            </Link>
-
-                            <Link
-                                href="/bbs"
-                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-                            >
-                                <span>📋</span> <span>タスク掲示板</span>
-                            </Link>
-
-                            <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
-                        </nav>
-                    </aside>
-                )}
-
-                {/* メイン */}
-                <main
-                    className="space-y-4"
-                    aria-busy={loading}
-                    aria-live="polite"
-                >
-                    {/* 見出し */}
-                    {loading ? <SkeletonHeaderRow /> : (
-                        <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                            <div>
-                                <h1 className="m-0 text-2xl font-semibold tracking-tight">タスク掲示板</h1>
-                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                                    未受注 & 募集中のタスクのみ表示
-                                </p>
-                            </div>
-                            <button
-                                onClick={() => setOpen(true)}
-                                className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:translate-y-px"
-                            >
-                                依頼を投稿
-                            </button>
-                        </div>
+            {/* タスクリスト */}
+            <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900/60">
+                <div className="mb-3 flex items-center justify-between">
+                    <h2 className="text-lg font-semibold tracking-tight">募集中のタスク</h2>
+                    {!loading && (
+                        <span className="text-xs text-gray-500 dark:text-gray-400">{visibleTasks.length} 件</span>
                     )}
+                </div>
 
-                    {/* タスクリスト */}
-                    <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900/60">
-                        <div className="mb-3 flex items-center justify-between">
-                            <h2 className="text-lg font-semibold tracking-tight">募集中のタスク</h2>
-                            {!loading && (
-                                <span className="text-xs text-gray-500 dark:text-gray-400">{visibleTasks.length} 件</span>
-                            )}
-                        </div>
-
-                        {loading ? (
-                            // ローディング時はスケルトン表示
-                            <ul className="flex list-none flex-col gap-3">
-                                <SkeletonCard />
-                                <SkeletonCard />
-                                <SkeletonCard />
-                            </ul>
-                        ) : visibleTasks.length === 0 ? (
-                            // 件数0のときの空表示
-                            <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-400">
-                                募集中のタスクはありません。
-                            </div>
-                        ) : (
-                            // タスク一覧
-                            <ul className="flex list-none flex-col gap-3">
-                                {visibleTasks.map((t) => (
-                                    <li
-                                        key={t.id}
-                                        className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition hover:shadow-md dark:border-gray-800 dark:bg-gray-900/60"
-                                    >
-                                        {/* Hoverアクセント */}
-                                        <div className="pointer-events-none absolute inset-0 opacity-0 transition group-hover:opacity-100">
-                                            <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/0 via-indigo-500/5 to-indigo-500/0" />
-                                        </div>
-
-                                        <div className="relative z-10 grid gap-3 sm:grid-cols-[1fr,auto] sm:items-start">
-                                            <div className="min-w-0">
-                                                <div className="mb-1 flex flex-wrap items-center gap-2">
-                                                    <span className={`select-none ${badgeClass(t.status)}`}>
-                                                        {labelOf(t.status)}
-                                                    </span>
-                                                    <h3 className="m-0 truncate text-base font-medium">{t.title}</h3>
-                                                </div>
-
-                                                {t.description && (
-                                                    <p className="mb-2 whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300">
-                                                        {t.description}
-                                                    </p>
-                                                )}
-
-                                                <div className="flex flex-wrap items-center gap-2 text-xs">
-                                                    <span className={pillClass()}>
-                                                        依頼者: <strong className="font-semibold">{t.owner_username}</strong>
-                                                    </span>
-                                                    {typeof t.difficulty === 'number' && (
-                                                        <span className={pillClass()}>
-                                                            難易度: {t.difficulty}
-                                                        </span>
-                                                    )}
-                                                    {typeof t.reward === 'number' && (
-                                                        <span className={pillClass()}>
-                                                            報酬: {t.reward}
-                                                        </span>
-                                                    )}
-                                                    {t.due_date && (
-                                                        <span className={pillClass()}>
-                                                            期日: {new Date(t.due_date).toLocaleDateString("ja-JP")}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-
-                                            <div className="flex min-w-[220px] flex-col gap-2">
-                                                <button
-                                                    className="rounded-xl border border-indigo-600 bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:translate-y-px disabled:opacity-60 disabled:saturate-50"
-                                                    onClick={() => acceptTask(t.id)}
-                                                    disabled={!me?.id}
-                                                    aria-disabled={!me?.id}
-                                                    title={!me?.id ? 'ユーザー情報取得中' : 'このタスクを受注する'}
-                                                >
-                                                    受注する
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                    </section>
-                </main>
-            </div>
+                {loading ? (
+                    <ul className="flex list-none flex-col gap-3">
+                        <SkeletonCard />
+                        <SkeletonCard />
+                        <SkeletonCard />
+                    </ul>
+                ) : visibleTasks.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-400">
+                        募集中のタスクはありません。
+                    </div>
+                ) : (
+                    <ul className="flex list-none flex-col gap-3">
+                        {visibleTasks.map((t) => (
+                            <TaskCard key={t.id} t={t} meId={me?.id} onAccept={acceptTask} />
+                        ))}
+                    </ul>
+                )}
+            </section>
 
             {/* 作成モーダル */}
             {open && (
@@ -551,7 +517,7 @@ export default function BbsPage() {
                             </div>
 
                             <div className="space-y-1.5">
-                                <label className="text-xs text-gray-600 dark:text-gray-300">報酬（任意）</label>
+                                <label className="text-xs text-gray-600 dark:text-gray-300">報酬</label>
                                 <input
                                     className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-900"
                                     type="number"
@@ -573,7 +539,7 @@ export default function BbsPage() {
                         </div>
 
                         <div className="space-y-1.5">
-                            <label className="text-xs text-gray-600 dark:text-gray-300">期日（任意）</label>
+                            <label className="text-xs text-gray-600 dark:text-gray-300">期日</label>
                             <input
                                 type="date"
                                 className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-900 dark:[&::-webkit-calendar-picker-indicator]:invert"
@@ -602,7 +568,7 @@ export default function BbsPage() {
                     </div>
                 </Modal>
             )}
-        </div>
+        </>
     );
 }
 

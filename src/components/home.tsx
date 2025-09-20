@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
+import { showToast } from '@/components/toast';
 
 /** ステータス型 */
 type TaskStatus = 'open' | 'in_progress' | 'done';
@@ -11,10 +11,11 @@ type Task = {
     id: string;
     title: string;
     description?: string;
-    due_date?: string;        // APIが date 文字列（YYYY-MM-DD）を想定するならその形式
+    due_date?: string; // APIが date 文字列（YYYY-MM-DD）を想定するならその形式
     status: TaskStatus;
     created_at: string;
     contractor?: string;
+    reward?: number;
 };
 
 /** 新規作成ペイロード（id/created_at はサーバー側で付与） */
@@ -26,6 +27,36 @@ type Users = {
     level?: number;
     exp?: number;
 };
+
+type RewardApplied = {
+    added: number;      // 加算されたEXP（= tasks.reward）
+    newLevel: number;   // 更新後レベル
+    newExp: number;     // 更新後EXP（次レベルまでの内部EXP）
+};
+
+type UpdateStatusSuccess = {
+    ok: true;
+    updated: { id: string; status: TaskStatus };
+    rewardApplied: RewardApplied | null;
+};
+
+type UpdateStatusError = {
+    ok: false;
+    error:
+        | 'no_auth'
+        | 'invalid_payload'
+        | 'not_found_or_noop'
+        | 'csrf_mismatch'
+        | 'update_failed'
+        | string; // 将来拡張
+};
+
+function parseJsonSafe<T>(res: Response): Promise<T | null> {
+    return res
+        .json()
+        .then((j) => j as T)
+        .catch(() => null);
+}
 
 /** クッキー取得（URLエンコードを考慮して decode） */
 function readCookie(name: string) {
@@ -72,8 +103,8 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 
 const ALL_STATUSES: TaskStatus[] = ['open', 'in_progress', 'done'];
 
-/** ステータス更新API */
-async function updateTaskStatus(taskId: string, next: TaskStatus) {
+/** ステータス更新API（成功時は updated と rewardApplied を返す） */
+async function updateTaskStatus(taskId: string, next: TaskStatus): Promise<UpdateStatusSuccess> {
     const res = await fetch(`/api/tasks/status`, {
         method: 'PATCH',
         headers: {
@@ -83,12 +114,37 @@ async function updateTaskStatus(taskId: string, next: TaskStatus) {
         credentials: 'include',
         body: JSON.stringify({ taskId, status: next }),
     });
+
+    // 失敗系はエラーコードを含めた例外にする
     if (!res.ok) {
-        const msg = await res.text().catch(() => '');
-        throw new Error(msg || `Failed to update status (${res.status})`);
+        const json = await parseJsonSafe<{ ok:false; error:string; detail?:string }>(res);
+        const text = !json ? await res.text().catch(() => '') : '';
+        const message = ((json?.error ?? text) || `Failed (${res.status})`) + (json?.detail ? `: ${json.detail}` : '');
+        const err = new Error(message);
+        (err as any).code = json?.error ?? 'unknown_error';
+        (err as any).status = res.status;
+        throw err;
     }
-    const json = await res.json().catch(() => ({}));
-    return json as { status: TaskStatus };
+
+
+    // 成功: { ok:true, updated, rewardApplied } を期待
+    const json = (await parseJsonSafe<UpdateStatusSuccess>(res)) as UpdateStatusSuccess | null;
+    if (!json || !json.ok || !json.updated) {
+        const text = !json ? await res.text().catch(() => '') : '';
+        throw new Error(text || 'Malformed response from /api/tasks/status');
+    }
+
+    return json;
+}
+
+/** 「期限切れ かつ 未完了（done 以外）」判定 */
+function isOverdueAndNotDone(t: Task): boolean {
+    if (t.status === 'done') return false;
+    const due = parseDueDateLocal(t.due_date);
+    if (!due) return false;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return due < today;
 }
 
 /**
@@ -123,10 +179,11 @@ function StatusCell(props: {
         setSaving(true);
         try {
             await updateTaskStatus(taskId, next);
+            showToast({ type: 'success', message: 'ステータスを更新しました。' });
         } catch (err) {
             onRevert(prev);
             console.error(err);
-            alert('ステータスの更新に失敗しました。');
+            showToast({ type: 'error', message: 'ステータスの更新に失敗しました。' });
         } finally {
             setSaving(false);
             setEditing(false);
@@ -164,38 +221,6 @@ function StatusCell(props: {
                 </option>
             ))}
         </select>
-    );
-}
-
-/** サイドバーのスケルトン */
-function SkeletonSidebar() {
-    return (
-        <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
-            <div className="space-y-2">
-                <div className="px-2 pb-2">
-                    <div className="h-3 w-16 animate-pulse rounded bg-gray-200/80 dark:bg-gray-700/60" />
-                </div>
-                <div className="h-8 w-full animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
-                <div className="h-8 w-full animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
-                <div className="my-3 h-px w-full bg-dashed bg-[length:8px_1px] bg-left bg-repeat-x [background-image:linear-gradient(to_right,rgba(0,0,0,.15)_50%,transparent_0)] dark:[background-image:linear-gradient(to_right,rgba(255,255,255,.15)_50%,transparent_0)]" />
-            </div>
-        </aside>
-    );
-}
-
-/** 入力フォームのスケルトン */
-function SkeletonForm() {
-    return (
-        <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-            <div className="mb-3 h-5 w-56 animate-pulse rounded bg-gray-200/80 dark:bg-gray-700/60" />
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
-                <div className="sm:col-span-3 h-10 animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
-                <div className="sm:col-span-5 h-10 animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
-                <div className="sm:col-span-3 h-10 animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
-                <div className="sm:col-span-3 h-10 animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800" />
-            </div>
-            <div className="mt-3 h-10 w-28 animate-pulse rounded-lg bg-gradient-to-r from-indigo-300 to-violet-300 dark:from-indigo-700 dark:to-violet-700" />
-        </section>
     );
 }
 
@@ -277,7 +302,7 @@ function Modal(props: {
         >
             <div className="w-full max-w-2xl rounded-2xl border border-gray-200 bg-white p-0 shadow-xl dark:border-gray-800 dark:bg-gray-900">
                 <div className="flex items-center justify-between border-b border-gray-200 p-4 dark:border-gray-800">
-                    <h3 className="text-base font-semibold">{title}</h3>
+                    <h3 className="text_base font-semibold">{title}</h3>
                     <button
                         onClick={onClose}
                         className="rounded p-2 text-gray-500 hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 dark:text-gray-400 dark:hover:bg-gray-800"
@@ -326,56 +351,92 @@ function CreateTaskModal({
     titleInputRef: React.Ref<HTMLInputElement>;
     msg: string;
 }) {
+    // textarea で Cmd/Ctrl+Enter 送信
+    const onDetailsKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            e.preventDefault();
+            addTask();
+        }
+    };
+
+    // 入力エラーを即時ガイド（必要に応じ）
+    useEffect(() => {
+        if (open && newTitle.trim() === '' && msg) {
+            showToast({ type: 'warning', message: msg, duration: 2500 });
+        }
+    }, [open, msg, newTitle]);
+
     return (
         <Modal open={open} onClose={onClose} title="新規タスクの作成">
-            <p className="mb-3 text-sm text-gray-500 dark:text-gray-400">ようこそ、{email ?? '-'} さん</p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
-                <input
-                    ref={titleInputRef as React.Ref<HTMLInputElement>}
-                    className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
-                    placeholder="タイトル"
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                />
-                <input
-                    className="sm:col-span-5 w-full rounded-lg border border-gray-200 bg白 p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
-                    placeholder="詳細（任意）"
-                    value={newDescription}
-                    onChange={(e) => setNewDescription(e.target.value)}
-                />
-                <input
-                    type="date"
-                    className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:ring-2 dark:border-gray-800 dark:bg-gray-950 dark:[&::-webkit-calendar-picker-indicator]:invert"
-                    value={newDueLocal}
-                    onChange={(e) => setNewDueLocal(e.target.value)}
-                />
-                <select
-                    className="sm:col-span-3 w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
-                    value={newStatus}
-                    onChange={(e) => setNewStatus(e.target.value as TaskStatus)}
-                >
-                    <option value="open">未完了</option>
-                    <option value="in_progress">進行中</option>
-                    <option value="done">完了</option>
-                </select>
+            {/* 入力フォーム（縦積み） */}
+            <div className="space-y-3">
+                {/* タイトル */}
+                <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">タイトル *</label>
+                    <input
+                        ref={titleInputRef as React.Ref<HTMLInputElement>}
+                        className="w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:border-indigo-300 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
+                        value={newTitle}
+                        onChange={(e) => setNewTitle(e.target.value)}
+                        aria-required
+                    />
+                </div>
+
+                {/* 詳細 */}
+                <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">詳細（任意）</label>
+                    <textarea
+                        className="w-full min-h-[140px] resize-y rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:border-indigo-300 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
+                        placeholder="Cmd/Ctrl + Enter で追加"
+                        value={newDescription}
+                        onChange={(e) => setNewDescription(e.target.value)}
+                        onKeyDown={onDetailsKeyDown}
+                        rows={6}
+                    />
+                </div>
+
+                {/* ステータス */}
+                <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">ステータス</label>
+                    <select
+                        className="w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 focus:border-indigo-300 focus:ring-2 dark:border-gray-800 dark:bg-gray-950"
+                        value={newStatus}
+                        onChange={(e) => setNewStatus(e.target.value as TaskStatus)}
+                    >
+                        <option value="open">未完了</option>
+                        <option value="in_progress">進行中</option>
+                        <option value="done">完了</option>
+                    </select>
+                </div>
+
+                {/* 期日 */}
+                <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">期限（任意）</label>
+                    <input
+                        type="date"
+                        className="w-full rounded-lg border border-gray-200 bg-white p-3 text-sm outline-none ring-indigo-500/20 placeholder:text-gray-400 focus:border-indigo-300 focus:ring-2 dark:border-gray-800 dark:bg-gray-950 dark:[&::-webkit-calendar-picker-indicator]:invert"
+                        value={newDueLocal}
+                        onChange={(e) => setNewDueLocal(e.target.value)}
+                    />
+                </div>
             </div>
 
+            {/* アクション */}
             <div className="mt-4 flex items-center justify-end gap-2">
                 <button
                     onClick={onClose}
-                    className="rounded-lg px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+                    className="rounded-lg px-4 py-2 text-sm font-semibold text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
                 >
                     キャンセル
                 </button>
                 <button
                     onClick={addTask}
                     className="rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99]"
+                    title="追加（Cmd/Ctrl + Enter でも送信）"
                 >
                     追加する
                 </button>
             </div>
-
-            {msg && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{msg}</p>}
         </Modal>
     );
 }
@@ -396,7 +457,7 @@ export default function HomePage() {
     const router = useRouter();
 
     // === 絞り込み（再検索なし） ===
-    const [statusFilter, setStatusFilter] = useState<'all' | TaskStatus>('all');
+    const [statusFilter, setStatusFilter] = useState<'all' | 'not_done' | TaskStatus>('not_done');
     const [dueFilter, setDueFilter] = useState<DueFilter>('all');
     const [rangeFrom, setRangeFrom] = useState<string>(''); // YYYY-MM-DD
     const [rangeTo, setRangeTo] = useState<string>('');     // YYYY-MM-DD
@@ -418,6 +479,7 @@ export default function HomePage() {
                 // 1) 自分情報
                 const meRes = await fetch('/api/me', { credentials: 'include' });
                 if (!meRes.ok) {
+                    showToast({ type: 'warning', message: 'ログインが必要です。' });
                     router.push('/');
                     return;
                 }
@@ -435,6 +497,7 @@ export default function HomePage() {
                 console.error('bootstrap failed:', e);
                 setTasks([]);
                 setUsers([]);
+                showToast({ type: 'error', message: '初期化に失敗しました。' });
             } finally {
                 setLoading(false);
             }
@@ -451,10 +514,12 @@ export default function HomePage() {
                     setTasks(data.tasks ?? []);
                 } else {
                     setTasks([]);
+                    showToast({ type: 'error', message: 'タスクの取得に失敗しました。' });
                 }
             } catch (e) {
                 console.error('fetchTasks failed:', e);
                 setTasks([]);
+                showToast({ type: 'error', message: 'タスクの取得でネットワークエラーが発生しました。' });
             }
         }
 
@@ -463,6 +528,7 @@ export default function HomePage() {
                 const res = await fetch('/api/users', { credentials: 'include' });
                 if (!res.ok) {
                     setUsers([]);
+                    showToast({ type: 'error', message: 'ユーザー一覧の取得に失敗しました。' });
                     return [];
                 }
                 const data = await res.json();
@@ -472,6 +538,7 @@ export default function HomePage() {
             } catch (e) {
                 console.error('fetchUsers failed:', e);
                 setUsers([]);
+                showToast({ type: 'error', message: 'ユーザー取得でネットワークエラーが発生しました。' });
                 return [];
             }
         }
@@ -483,7 +550,9 @@ export default function HomePage() {
     const addTask = useCallback(async () => {
         const title = newTitle.trim();
         if (!title) {
-            setMsg('タイトルを入力してください');
+            const m = 'タイトルを入力してください';
+            setMsg(m);
+            showToast({ type: 'warning', message: m });
             return;
         }
 
@@ -506,6 +575,8 @@ export default function HomePage() {
             payload.contractor = users[0].id;
         }
 
+        payload.reward = 100;
+
         try {
             const res = await fetch('/api/tasks', {
                 method: 'POST',
@@ -525,14 +596,19 @@ export default function HomePage() {
                 setNewDescription('');
                 setNewDueLocal('');
                 setNewStatus('open');
-                setMsg('追加しました');
+                setMsg('');
                 setCreateOpen(false); // 成功で閉じる
+                showToast({ type: 'success', message: 'タスクを追加しました。' });
             } else {
-                setMsg(`追加に失敗: ${data.error ?? 'unknown error'}`);
+                const m = `追加に失敗: ${data.error ?? 'unknown error'}`;
+                setMsg(m);
+                showToast({ type: 'error', message: m });
             }
         } catch (e) {
             console.error('addTask failed:', e);
-            setMsg('追加に失敗: ネットワークエラー');
+            const m = '追加に失敗: ネットワークエラー';
+            setMsg(m);
+            showToast({ type: 'error', message: m });
         }
     }, [newTitle, newDescription, newDueLocal, newStatus, users]);
 
@@ -563,7 +639,8 @@ export default function HomePage() {
 
         return tasks.filter((t) => {
             // ステータスフィルタ
-            if (statusFilter !== 'all' && t.status !== statusFilter) return false;
+            if (statusFilter === 'not_done' && t.status === 'done') return false;
+            if (statusFilter !== 'all' && statusFilter !== 'not_done' && t.status !== statusFilter) return false;
 
             // 期限フィルタ
             const due = parseDueDateLocal(t.due_date);
@@ -600,181 +677,154 @@ export default function HomePage() {
         }
     }, [dueFilter]);
 
+    // ===== Homeページのメイン内容（サイドバー・外枠はレイアウト側で共通化） =====
     return (
-        <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+        <>
+            {loading ? (
+                <>
+                    <SkeletonTable />
+                </>
+            ) : (
+                <>
+                    {/* ====== タスク一覧（フィルタ + 新規ボタン） ====== */}
+                    <section className="rounded-2xl border border-gray-200 bg-white p-0 dark:border-gray-800 dark:bg-gray-900">
+                        <div className="flex flex-col gap-3 border-b border-gray-200 p-4 dark:border-gray-800 sm:flex-row sm:items-center sm:justify-between">
+                            <h2 className="text-sm font-semibold">タスク一覧</h2>
 
-            {/* ===== シェル（サイドバー + メイン） ===== */}
-            <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 p-4 sm:grid-cols-[220px_minmax(0,1fr)]">
-                {/* ===== サイドバー ===== */}
-                {loading ? (
-                    <SkeletonSidebar />
-                ) : (
-                    <aside className="sticky top-16 hidden h-[calc(100vh-5rem)] rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900 sm:block">
-                        <nav className="space-y-1" aria-label="サイドバー">
-                            <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                                メニュー
-                            </div>
-                            {/* 内部リンクは Link でプリフェッチ */}
-                            <Link
-                                href="/home"
-                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 rounded-sm"
-                            >
-                                <span>📋</span> <span>ホーム</span>
-                            </Link>
-                            <Link
-                                href="/bbs"
-                                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 rounded-sm"
-                            >
-                                <span>📋</span> <span>タスク掲示板</span>
-                            </Link>
-                            <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
-                        </nav>
-                    </aside>
-                )}
+                            {/* 右側：フィルタと「新規」ボタン */}
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                {/* ステータスフィルタ */}
+                                <label className="flex items-center gap-2 text-xs sm:text-sm">
+                                    <span className="whitespace-nowrap text-gray-500 dark:text-gray-400">ステータス</span>
+                                    <select
+                                        className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
+                                        value={statusFilter}
+                                        onChange={(e) => setStatusFilter(e.target.value as 'all' | 'not_done' | TaskStatus)}
+                                    >
+                                        <option value="all">すべて</option>
+                                        <option value="open">未完了</option>
+                                        <option value="in_progress">進行中</option>
+                                        <option value="done">完了</option>
+                                        <option value="not_done">完了以外</option>
+                                    </select>
+                                </label>
 
-                <main className="space-y-4" aria-busy={loading} aria-live="polite">
-                    {loading ? (
-                        <>
-                            <SkeletonForm />
-                            <SkeletonTable />
-                        </>
-                    ) : (
-                        <>
-                            {/* ====== タスク一覧（フィルタ + 新規ボタン） ====== */}
-                            <section className="rounded-2xl border border-gray-200 bg-white p-0 dark:border-gray-800 dark:bg-gray-900">
-                                <div className="flex flex-col gap-3 border-b border-gray-200 p-4 dark:border-gray-800 sm:flex-row sm:items-center sm:justify-between">
-                                    <h2 className="text-sm font-semibold">タスク一覧</h2>
+                                {/* 期限フィルタ */}
+                                <label className="flex items-center gap-2 text-xs sm:text-sm">
+                                    <span className="whitespace-nowrap text-gray-500 dark:text-gray-400">期限</span>
+                                    <select
+                                        className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
+                                        value={dueFilter}
+                                        onChange={(e) => setDueFilter(e.target.value as DueFilter)}
+                                    >
+                                        <option value="all">すべて</option>
+                                        <option value="no_due">期限なし</option>
+                                        <option value="overdue">期限切れ</option>
+                                        <option value="today">今日まで</option>
+                                        <option value="this_week">今週まで</option>
+                                        <option value="this_month">今月まで</option>
+                                        <option value="range">期間指定</option>
+                                    </select>
+                                </label>
 
-                                    {/* 右側：フィルタと「新規」ボタン */}
-                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                                        {/* ステータスフィルタ */}
-                                        <label className="flex items-center gap-2 text-xs sm:text-sm">
-                                            <span className="whitespace-nowrap text-gray-500 dark:text-gray-400">ステータス</span>
-                                            <select
-                                                className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
-                                                value={statusFilter}
-                                                onChange={(e) => setStatusFilter(e.target.value as 'all' | TaskStatus)}
-                                            >
-                                                <option value="all">すべて</option>
-                                                <option value="open">未完了</option>
-                                                <option value="in_progress">進行中</option>
-                                                <option value="done">完了</option>
-                                            </select>
-                                        </label>
-
-                                        {/* 期限フィルタ */}
-                                        <label className="flex items-center gap-2 text-xs sm:text-sm">
-                                            <span className="whitespace-nowrap text-gray-500 dark:text-gray-400">期限</span>
-                                            <select
-                                                className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
-                                                value={dueFilter}
-                                                onChange={(e) => setDueFilter(e.target.value as DueFilter)}
-                                            >
-                                                <option value="all">すべて</option>
-                                                <option value="no_due">期限なし</option>
-                                                <option value="overdue">期限切れ</option>
-                                                <option value="today">今日まで</option>
-                                                <option value="this_week">今週まで</option>
-                                                <option value="this_month">今月まで</option>
-                                                <option value="range">期間指定</option>
-                                            </select>
-                                        </label>
-
-                                        {/* 範囲指定 */}
-                                        {dueFilter === 'range' && (
-                                            <div className="flex items-center gap-2">
-                                                <input
-                                                    type="date"
-                                                    className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900 dark:[&::-webkit-calendar-picker-indicator]:invert"
-                                                    value={rangeFrom}
-                                                    onChange={(e) => setRangeFrom(e.target.value)}
-                                                    aria-label="開始日"
-                                                />
-                                                <span className="text-gray-400">~</span>
-                                                <input
-                                                    type="date"
-                                                    className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900 dark:[&::-webkit-calendar-picker-indicator]:invert"
-                                                    value={rangeTo}
-                                                    onChange={(e) => setRangeTo(e.target.value)}
-                                                    aria-label="終了日"
-                                                />
-                                            </div>
-                                        )}
-
-                                        {/* 件数 */}
-                                        <span className="text-xs text-gray-500 dark:text-gray-400">
-                                            {filteredTasks.length} / {tasks.length} 件
-                                        </span>
-
-                                        {/* モーダルを開くボタン（フィルタ群の右端） */}
-                                        <button
-                                            type="button"
-                                            onClick={() => setCreateOpen(true)}
-                                            className="ml-0 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99] sm:ml-2"
-                                        >
-                                            ＋ 新規タスク
-                                        </button>
+                                {/* 範囲指定 */}
+                                {dueFilter === 'range' && (
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="date"
+                                            className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900 dark:[&::-webkit-calendar-picker-indicator]:invert"
+                                            value={rangeFrom}
+                                            onChange={(e) => setRangeFrom(e.target.value)}
+                                            aria-label="開始日"
+                                        />
+                                        <span className="text-gray-400">~</span>
+                                        <input
+                                            type="date"
+                                            className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900 dark:[&::-webkit-calendar-picker-indicator]:invert"
+                                            value={rangeTo}
+                                            onChange={(e) => setRangeTo(e.target.value)}
+                                            aria-label="終了日"
+                                        />
                                     </div>
-                                </div>
+                                )}
 
-                                <div className="overflow-x-auto">
-                                    <table className="w-full border-collapse text-sm">
-                                        <thead>
-                                            <tr className="bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-300">
-                                                <th className="px-4 py-2 text-left">タイトル</th>
-                                                <th className="px-4 py-2 text-left">詳細</th>
-                                                <th className="px-4 py-2 text-left">ステータス</th>
-                                                <th className="px-4 py-2 text-left">期限</th>
+                                {/* 件数 */}
+                                <span className="text-xs text-gray-500 dark:text-gray-400">
+                                    {filteredTasks.length} / {tasks.length} 件
+                                </span>
+
+                                {/* モーダルを開くボタン（フィルタ群の右端） */}
+                                <button
+                                    type="button"
+                                    onClick={() => setCreateOpen(true)}
+                                    className="ml-0 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99] sm:ml-2"
+                                >
+                                    ＋ 新規タスク
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                            <table className="w-full border-collapse text-sm">
+                                <thead>
+                                    <tr className="bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                                        <th className="px-4 py-2 text-left">タイトル</th>
+                                        <th className="px-4 py-2 text-left">詳細</th>
+                                        <th className="px-4 py-2 text-left">報酬</th>
+                                        <th className="px-4 py-2 text-left">ステータス</th>
+                                        <th className="px-4 py-2 text-left">期限</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredTasks.length === 0 && (
+                                        <tr>
+                                            <td colSpan={5} className="px-4 py-6 text-center text-gray-500 dark:text-gray-400">
+                                                条件に一致するタスクがありません。
+                                            </td>
+                                        </tr>
+                                    )}
+                                    {filteredTasks.map((t, idx) => {
+                                        const zebra = idx % 2 === 0 ? 'bg-white dark:bg-gray-900' : 'bg-gray-50 dark:bg-gray-950';
+                                        const danger = isOverdueAndNotDone(t) ? ' text-red-600 dark:text-red-400' : '';
+                                        const rowClass = zebra + danger;
+
+                                        return (
+                                            <tr key={t.id} className={rowClass}>
+                                                <td className="px-4 py-3">{t.title}</td>
+                                                <td className="px-4 py-3">{t.description ?? '-'}</td>
+                                                <td className="px-4 py-3">{t.reward ?? 0}</td>
+                                                <td className="px-4 py-3">
+                                                    <StatusCell
+                                                        taskId={t.id}
+                                                        value={t.status}
+                                                        onLocalChange={(next) => {
+                                                            // 楽観更新：先にローカルを書き換える
+                                                            setTasks((prev) =>
+                                                                prev.map((x) =>
+                                                                    x.id === t.id ? { ...x, status: next } : x
+                                                                )
+                                                            );
+                                                        }}
+                                                        onRevert={(prevStatus) => {
+                                                            // 失敗時ロールバック：以前の値に戻す
+                                                            setTasks((prev) =>
+                                                                prev.map((x) =>
+                                                                    x.id === t.id ? { ...x, status: prevStatus } : x
+                                                                )
+                                                            );
+                                                        }}
+                                                    />
+                                                </td>
+                                                <td className="px-4 py-3">{fmtDateOnly(t.due_date)}</td>
                                             </tr>
-                                        </thead>
-                                        <tbody>
-                                            {filteredTasks.length === 0 && (
-                                                <tr>
-                                                    <td colSpan={5} className="px-4 py-6 text-center text-gray-500 dark:text-gray-400">
-                                                        条件に一致するタスクがありません。
-                                                    </td>
-                                                </tr>
-                                            )}
-                                            {filteredTasks.map((t, idx) => (
-                                                <tr
-                                                    key={t.id}
-                                                    className={idx % 2 === 0 ? 'bg-white dark:bg-gray-900' : 'bg-gray-50 dark:bg-gray-950'}
-                                                >
-                                                    <td className="px-4 py-3">{t.title}</td>
-                                                    <td className="px-4 py-3">{t.description ?? '-'}</td>
-                                                    <td className="px-4 py-3">
-                                                        <StatusCell
-                                                            taskId={t.id}
-                                                            value={t.status}
-                                                            onLocalChange={(next) => {
-                                                                // 楽観更新：先にローカルを書き換える
-                                                                setTasks((prev) =>
-                                                                    prev.map((x) =>
-                                                                        x.id === t.id ? { ...x, status: next } : x
-                                                                    )
-                                                                );
-                                                            }}
-                                                            onRevert={(prevStatus) => {
-                                                                // 失敗時ロールバック：以前の値に戻す
-                                                                setTasks((prev) =>
-                                                                    prev.map((x) =>
-                                                                        x.id === t.id ? { ...x, status: prevStatus } : x
-                                                                    )
-                                                                );
-                                                            }}
-                                                        />
-                                                    </td>
-                                                    <td className="px-4 py-3">{fmtDateOnly(t.due_date)}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </section>
-                        </>
-                    )}
-                </main>
-            </div>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </>
+            )}
 
             {/* モーダル呼び出し */}
             <CreateTaskModal
@@ -793,6 +843,6 @@ export default function HomePage() {
                 titleInputRef={titleInputRef}
                 msg={msg}
             />
-        </div>
+        </>
     );
 }

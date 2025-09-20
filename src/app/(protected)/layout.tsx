@@ -7,6 +7,8 @@ import { cookies } from 'next/headers';
 import { readAccessTokenFromCookie, verifyAccess } from '@/lib/auth/common';
 import Header from '@/components/header';
 import Footer from '@/components/footer';
+import Sidebar from '@/components/sidebar';
+import { ToastProvider } from '@/components/toast';
 
 type Props = Readonly<{
     children: ReactNode;
@@ -20,7 +22,7 @@ export default async function ProtectedLayout({ children }: Props) {
     const token = await readAccessTokenFromCookie();
 
     if (!token) {
-        // TODO: 可能なら /login?next=... を検討（Middlewareで現在URL取得して付与するのが安全）
+        // TODO: 可能なら /login?next=... を検討（Middlewareで現在URL取得して付与が安全）
         redirect('/login');
     }
 
@@ -34,9 +36,26 @@ export default async function ProtectedLayout({ children }: Props) {
 
     return (
         <>
-            <Header />
-            <>{children}</>
-            <Footer />
+            <ToastProvider>
+                <Header />
+
+                {/* 共通の背景とレイアウトシェル（サイドバー + メイン） */}
+                <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+                    <div className="mx-auto max-w-6xl p-4">
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[220px_minmax(0,1fr)]">
+                            {/* 共通サイドバー */}
+                            <Sidebar />
+
+                            {/* メイン（各ページの children を配置） */}
+                            <main className="space-y-4" aria-live="polite">
+                                {children}
+                            </main>
+                        </div>
+                    </div>
+                </div>
+
+                <Footer />
+            </ToastProvider>
         </>
     );
 }

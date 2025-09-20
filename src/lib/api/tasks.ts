@@ -20,7 +20,7 @@ export type Task = {
     due_date: string | null;  // JSON 化時に Date → ISO 文字列になるため string でOK
     status: 'open' | 'in_progress' | 'done';
     created_at: string;
-    contractor: string | null; // ★ NULL 許容（重要）
+    contractor: string | null; // NULL 許容
 };
 
 type Status = Task['status'];
@@ -48,7 +48,7 @@ const NO_STORE = { 'Cache-Control': 'no-store' as const };
 
 async function dbGetTasks(contractor: string): Promise<Task[]> {
     const rows = await sql`
-        SELECT id, owner_id, title, description, due_date, status, created_at, contractor
+        SELECT id, owner_id, title, description, due_date, status, created_at, contractor, reward
         FROM tasks
         WHERE contractor = ${contractor}
         ORDER BY created_at DESC
@@ -64,38 +64,24 @@ async function dbCreateTask(params: {
     due_date: string | null; // 文字列 ISO or null を受けて DB 側は timestamp に
     status: Status;
     contractor: string;
+    reward?: number;
 }): Promise<Task> {
-    const { userId, title, description, due_date, status, contractor } = params;
+    const { userId, title, description, due_date, status, contractor, reward } = params;
 
     const rows = await sql`
-        INSERT INTO tasks (owner_id, title, description, due_date, status, contractor)
+        INSERT INTO tasks (owner_id, title, description, due_date, status, contractor, reward)
         VALUES (
             ${userId},
             ${title},
             ${description},
             ${due_date ? new Date(due_date) : null},
             ${status},
-            ${contractor}
+            ${contractor},
+            ${reward}
         )
-        RETURNING id, owner_id, title, description, due_date, status, created_at, contractor
+        RETURNING id, owner_id, title, description, due_date, status, created_at, contractor, reward
     `;
     return rows[0] as Task;
-}
-
-async function dbUpdateTaskStatus(params: {
-    userId: string;
-    taskId: string;
-    status: Status;
-}): Promise<{ id: string; status: Status } | null> {
-    const { userId, taskId, status } = params;
-    const rows = await sql`
-        UPDATE tasks
-        SET status = ${status}
-        WHERE id = ${taskId} AND owner_id = ${userId}
-        RETURNING id, status
-    `;
-    // ★ ここは Task 全体ではなく {id, status} のみを返すクエリなので型も合わせる
-    return (rows[0] as { id: string; status: Status }) ?? null;
 }
 
 async function dbGetTasksBbs(): Promise<Task[]> {
@@ -109,7 +95,9 @@ async function dbGetTasksBbs(): Promise<Task[]> {
             t.due_date,
             t.status,
             t.created_at,
-            t.contractor
+            t.contractor,
+            t.difficulty,
+            t.reward
         FROM tasks t
         INNER JOIN users u
             ON t.owner_id = u.id
@@ -139,6 +127,131 @@ async function dbUpdateTaskAccept(taskId: string, contractorId: string): Promise
     `;
     return (rows[0] as Task) ?? null;
 }
+
+/**
+ * ステータス更新 + 報酬付与 + レベルアップ反映（原子的に実施）
+ * - 同じ値への再更新を弾く（status IS DISTINCT FROM）
+ * - 'done' への変更時のみ報酬付与
+ * - 複数段のレベルアップに再帰CTEで対応
+ */
+async function dbUpdateTaskStatusAndApplyReward(params: {
+    userId: string;
+    taskId: string;
+    newStatus: Status;
+}): Promise<{
+    updated: { id: string; status: Status } | null;
+    rewardApplied: { added: number; newLevel: number; newExp: number } | null;
+}> {
+    const { userId, taskId, newStatus } = params;
+
+    const rows = await sql`
+        WITH RECURSIVE
+        updated AS (
+            UPDATE tasks
+            SET status = ${newStatus}, updated_at = now()
+            WHERE id = ${taskId}
+              AND contractor = ${userId}
+              AND status IS DISTINCT FROM ${newStatus}
+            RETURNING id, status, reward
+        ),
+        base_user AS (
+            SELECT id, level, exp
+            FROM users
+            WHERE id = ${userId}
+        ),
+        calc AS (
+            SELECT
+                b.id,
+                b.level,
+                b.exp
+                    + CASE WHEN (SELECT status = 'done' FROM updated LIMIT 1)
+                           THEN COALESCE((SELECT reward FROM updated LIMIT 1), 0)
+                           ELSE 0
+                      END AS exp_after,
+                CASE WHEN (SELECT status = 'done' FROM updated LIMIT 1)
+                     THEN COALESCE((SELECT reward FROM updated LIMIT 1), 0)
+                     ELSE 0
+                END AS added
+            FROM base_user b
+        ),
+        lvl AS (
+            -- anchor
+            SELECT
+                c.id,
+                c.level AS cur_level,
+                c.exp_after AS cur_exp,
+                (SELECT required_total_exp FROM levels WHERE level = c.level LIMIT 1) AS req
+            FROM calc c
+            UNION ALL
+            -- step
+            SELECT
+                l.id,
+                l.cur_level + 1,
+                l.cur_exp - COALESCE(l.req, 2147483647),
+                (SELECT required_total_exp FROM levels WHERE level = l.cur_level + 1 LIMIT 1) AS req
+            FROM lvl l
+            WHERE COALESCE(l.req, 2147483647) > 0
+              AND l.cur_exp >= COALESCE(l.req, 2147483647)
+        ),
+        final AS (
+            SELECT
+                c.id,
+                COALESCE(
+                    (SELECT cur_level FROM lvl ORDER BY cur_level DESC LIMIT 1),
+                    c.level
+                ) AS new_level,
+                COALESCE(
+                    (SELECT cur_exp FROM lvl ORDER BY cur_level DESC LIMIT 1),
+                    c.exp_after
+                ) AS new_exp,
+                c.added
+            FROM calc c
+        ),
+        applied AS (
+            UPDATE users u
+            SET level = f.new_level,
+                exp = f.new_exp,
+                updated_at = now()
+            FROM final f
+            WHERE u.id = f.id
+              AND (SELECT status = 'done' FROM updated LIMIT 1)
+            RETURNING u.id, u.level, u.exp, f.added
+        )
+        SELECT
+            (SELECT id FROM updated LIMIT 1) AS task_id,
+            (SELECT status FROM updated LIMIT 1) AS new_status,
+            (SELECT added FROM final LIMIT 1) AS reward_added,
+            (SELECT level FROM applied LIMIT 1) AS new_level,
+            (SELECT exp FROM applied LIMIT 1) AS new_exp
+    `;
+
+    const row = rows?.[0] as
+        | {
+              task_id: string | null;
+              new_status: Status | null;
+              reward_added: number | null;
+              new_level: number | null;
+              new_exp: number | null;
+          }
+        | undefined;
+
+    if (!row || !row.task_id) {
+        return { updated: null, rewardApplied: null };
+    }
+
+    const updated = { id: row.task_id, status: row.new_status as Status };
+    const rewardApplied =
+        row.reward_added && row.new_level !== null && row.new_exp !== null
+            ? {
+                  added: Number(row.reward_added),
+                  newLevel: Number(row.new_level),
+                  newExp: Number(row.new_exp),
+              }
+            : null;
+
+    return { updated, rewardApplied };
+}
+
 
 /* =========================
  * Route ハンドラ（関数化）
@@ -194,6 +307,7 @@ export async function handlePostTasks(req: Request) {
             due_date?: string; // ISO or YYYY-MM-DD 想定
             status?: Status | string; // 型ガードで Status に絞る
             contractor?: string;
+            reward?: number;
         };
 
         let body: Body = {};
@@ -235,6 +349,8 @@ export async function handlePostTasks(req: Request) {
 
         const contractor = (body?.contractor ?? '').trim();
 
+        const reward = body?.reward;
+
         const task = await dbCreateTask({
             userId: String(payload.sub),
             title,
@@ -242,6 +358,7 @@ export async function handlePostTasks(req: Request) {
             due_date,
             status,
             contractor,
+            reward
         });
 
         return NextResponse.json(
@@ -264,6 +381,11 @@ export async function handlePostTasks(req: Request) {
     }
 }
 
+/**
+ * ステータス更新（外だし関数を利用）
+ * - 同じ値への再更新は行わない（status IS DISTINCT FROM）
+ * - 'done' への変更時のみ報酬付与＆レベル更新
+ */
 export async function handlePatchTasksStatus(req: Request) {
     try {
         const token = await readAccessTokenFromCookie();
@@ -277,13 +399,12 @@ export async function handlePatchTasksStatus(req: Request) {
 
         await requireCsrf();
 
-        // 単発更新・複数更新のどちらかを想定（今は単発のみ利用）
+        // 単発更新
         type SingleBody = { taskId?: string; status?: unknown };
-        type MultiBody = { updates?: Array<{ taskId?: string; status?: unknown }> };
 
-        let body: SingleBody & MultiBody = {};
+        let body: SingleBody = {};
         try {
-            body = (await req.json()) as SingleBody & MultiBody;
+            body = (await req.json()) as SingleBody;
         } catch {
             // 何も送られてこないケースは下のバリデーションで弾く
         }
@@ -301,30 +422,33 @@ export async function handlePatchTasksStatus(req: Request) {
             );
         }
 
-        const updated = await dbUpdateTaskStatus({ userId, taskId, status: st });
+        const { updated, rewardApplied } = await dbUpdateTaskStatusAndApplyReward({
+            userId,
+            taskId,
+            newStatus: st,
+        });
+
         if (!updated) {
+            // 404: 該当なし / 受注者不一致 / 同じステータスで変更なし
             return NextResponse.json(
-                { ok: false, error: 'not_found' },
+                { ok: false, error: 'not_found_or_noop' },
                 { status: 404, headers: NO_STORE }
             );
         }
 
         return NextResponse.json(
-            { ok: true, updated },
+            { ok: true, updated, rewardApplied: rewardApplied ?? null },
             { status: 200, headers: NO_STORE }
         );
     } catch (e) {
-        // ここは CSRF/認証以外の落ち（DB など）をカバー
-        const message =
-            typeof e === 'object' && e !== null && 'message' in e
-                ? String((e as { message?: unknown }).message)
+        const msg =
+            typeof e === 'object' && e && 'message' in e
+                ? String((e as any).message)
                 : '';
-        const isCsrf = message === 'csrf_mismatch';
+        const isCsrf = msg === 'csrf_mismatch';
         const status = isCsrf ? 403 : 500;
-        const code: 'csrf_mismatch' | 'update_failed' = isCsrf ? 'csrf_mismatch' : 'update_failed';
-
         return NextResponse.json(
-            { ok: false, error: code },
+            { ok: false, error: isCsrf ? 'csrf_mismatch' : 'update_failed', detail: msg },
             { status, headers: NO_STORE }
         );
     }
