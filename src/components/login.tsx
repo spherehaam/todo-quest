@@ -284,6 +284,13 @@ export default function Page() {
                         >
                             {submitting ? 'ログイン中…' : 'ログイン'}
                         </button>
+
+                        <Link
+                            href="/signup"
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 dark:hover:bg-gray-800"
+                        >
+                            <span>新規アカウントの作成</span>
+                        </Link>
                     </form>
 
                     {/* ローカル環境限定のデバッグボタン群 */}

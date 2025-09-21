@@ -325,7 +325,7 @@ export default function Header() {
                 {/* 右：ユーザー情報＆ログアウト */}
                 <div className="flex items-center gap-3">
                     <span className="hidden text-xs text-gray-500 dark:text-gray-400 sm:inline">
-                        {email ?? 'Guest'}
+                        {users[0].username ?? 'Guest'}
                     </span>
                     <button
                         onClick={logout}
