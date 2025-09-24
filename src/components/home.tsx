@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { showToast } from '@/components/toast';
+import { publishUserUpdate } from '@/lib/user-store';
 
 /** ステータス種別 */
 type TaskStatus = 'open' | 'in_progress' | 'done';
@@ -172,7 +173,14 @@ function StatusCell(props: {
         onLocalChange(next); // 楽観的更新
         setSaving(true);
         try {
-            await updateTaskStatus(taskId, next);
+            const res = await updateTaskStatus(taskId, next);
+
+            if (res.rewardApplied) {
+                publishUserUpdate({
+                    level: res.rewardApplied.newLevel,
+                    exp: res.rewardApplied.newExp,
+                });
+            }
             showToast({ type: 'success', message: 'ステータスを更新しました。' });
         } catch (err) {
             onRevert(prev); // ロールバック
@@ -442,7 +450,8 @@ export default function HomePage() {
     const router = useRouter();
 
     // フィルタ状態
-    const [statusFilter, setStatusFilter] = useState<'all' | 'not_done' | TaskStatus>('not_done');
+    const [statusFilter, setStatusFilter] = useState<'all' | 'not_done' | TaskStatus>('all');
+    // const [statusFilter, setStatusFilter] = useState<'all' | 'not_done' | TaskStatus>('not_done');
     const [dueFilter, setDueFilter] = useState<DueFilter>('all');
     const [rangeFrom, setRangeFrom] = useState<string>(''); // YYYY-MM-DD
     const [rangeTo, setRangeTo] = useState<string>('');     // YYYY-MM-DD

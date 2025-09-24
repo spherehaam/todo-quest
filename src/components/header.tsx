@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import { subscribeUserUpdate } from '@/lib/user-store';
 
 /**
  * ユーザー情報型
@@ -212,8 +213,40 @@ export default function Header() {
         setLoading(true);
         bootstrap();
 
+        // 🔹 publishUserUpdate.level をキーに levels を再取得してマージ
+        const unsubscribe = subscribeUserUpdate((u) => {
+            // ユーザーの level/exp を即時反映
+            setUsers((prev) => {
+                if (prev.length === 0) return prev;
+                const first = prev[0];
+                return [{ ...first, level: u.level, exp: u.exp }, ...prev.slice(1)];
+            });
+
+            // lvUpNeed 再計算のため、levels テーブルも最新化
+            (async () => {
+                try {
+                    const base = Number(u.level) || 1; // WHERE のキー: publishUserUpdate.level
+                    const params = new URLSearchParams();
+                    params.set('levels', base.toString()); // qs は "levels=1" の形式
+                    const url = `/api/levels?${params.toString()}`;
+
+                    const res = await fetch(url, { credentials: 'include' });
+                    if (!res.ok) return;
+
+                    const data = await res.json();
+                    const fetched: LevelRow[] = Array.isArray(data.levels) ? data.levels : [];
+                    if (!fetched[0]) return;
+
+                    setLevels([fetched[0]]);
+                } catch (err) {
+                    console.error('refresh levels after user update failed:', err);
+                }
+            })();
+        });
+
         return () => {
             mounted = false;
+            unsubscribe();
         };
     }, [router]);
 
