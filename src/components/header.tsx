@@ -96,14 +96,13 @@ function HeaderSkeleton() {
 
 /**
  * アプリのグローバルヘッダ
- * - /api/me でログイン判定 & email 表示
+ * - /api/me でログイン判定
  * - /api/users, /api/levels からレベル進捗バー用データを取得
  * - ログアウトは /api/logout POST
  *
- * ※ 処理ロジックは変更せず、コメントと整形のみ
+ * ※ 処理ロジックは変更せず、未使用変数 email を削除して lint 警告を解消
  */
 export default function Header() {
-    const [email, setEmail] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [users, setUsers] = useState<Users[]>([]);
     const [levels, setLevels] = useState<LevelRow[]>([]);
@@ -118,15 +117,12 @@ export default function Header() {
         async function bootstrap() {
             const start = performance.now();
             try {
-                // 認証チェック & email 取得
+                // 認証チェック
                 const meRes = await fetch('/api/me', { credentials: 'include' });
                 if (!meRes.ok) {
                     router.push('/');
                     return;
                 }
-                const me = await meRes.json();
-                if (!mounted) return;
-                setEmail(me.email);
 
                 // ユーザー一覧（levels 推定のためのレベル配列も受け取り）
                 const requestedLevels = await fetchUsers();
@@ -358,7 +354,7 @@ export default function Header() {
                 {/* 右：ユーザー情報＆ログアウト */}
                 <div className="flex items-center gap-3">
                     <span className="hidden text-xs text-gray-500 dark:text-gray-400 sm:inline">
-                        {users[0].username ?? 'Guest'}
+                        {users[0]?.username ?? 'Guest'}
                     </span>
                     <button
                         onClick={logout}

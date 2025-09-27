@@ -7,40 +7,63 @@ import { sql } from '@/lib/db';
 /** キャッシュ無効化ヘッダ（認証系は常に no-store） */
 const NO_STORE = { 'Cache-Control': 'no-store' as const };
 
-type Users = {
+/** SELECT users 重複チェック用の行型 */
+type DupUserRow = {
+    email: string;
+    username: string;
+};
+
+/** avatars / titles 取得用の行型 */
+type IdRow = {
     id: string;
+};
+
+/** INSERT 後に返すユーザー行 */
+type InsertedUser = {
+    id: string;
+    email: string;
     username: string;
     level: number;
     exp: number;
+    avatar_id: string | null;
+    title_id: string | null;
+    created_at: string;
+    updated_at: string;
 };
 
 async function duplicationCheck(email: string, username: string): Promise<void> {
-    const rows = await sql`
+    const rows = (await sql`
         SELECT email, username
         FROM users
         WHERE email = ${email} OR username = ${username}
-    `;
+    `) as DupUserRow[];
 
     if (rows.length > 0) {
-        const hasEmail = rows.some((r: any) => r.email === email);
-        const hasUsername = rows.some((r: any) => r.username === username);
+        const hasEmail = rows.some((r) => r.email === email);
+        const hasUsername = rows.some((r) => r.username === username);
         const code = hasEmail ? (hasUsername ? 'email_and_username_taken' : 'email_taken') : 'username_taken';
-        throw Object.assign(new Error(code), { status: 409 });
+        throw Object.assign(new Error(code), { status: 409 as const });
     }
 }
 
 async function getAvatarIdByName(name: string): Promise<string> {
-    const rows = await sql`SELECT id FROM avatars WHERE name = ${name} LIMIT 1`;
+    const rows = (await sql`
+        SELECT id FROM avatars WHERE name = ${name} LIMIT 1
+    `) as IdRow[];
+
     if (rows.length === 0) {
-        throw Object.assign(new Error(`avatar_not_found: ${name}`), { status: 500 });
+        throw Object.assign(new Error(`avatar_not_found: ${name}`), { status: 500 as const });
     }
     return rows[0].id;
 }
 
 async function getTitleIdByName(name: string): Promise<string> {
-    const rows = await sql`SELECT id FROM titles WHERE name = ${name} LIMIT 1`;
+    const rows = (await sql`
+        SELECT id FROM titles WHERE name = ${name} LIMIT 1
+    `) as IdRow[];
+
     if (rows.length === 0) {
-        throw Object.assign(new Error(`title_not_found: ${name}`), { status: 500 });
+        throw Object.assign(new Error(`title_not_found: ${name}`), { status: 500 as const });
     }
     return rows[0].id;
 }
@@ -51,10 +74,10 @@ async function insertUser(params: {
     passwordHash: string;
     avatarId: string;
     titleId: string;
-}) {
+}): Promise<InsertedUser> {
     const { email, username, passwordHash, avatarId, titleId } = params;
 
-    const rows = await sql`
+    const rows = (await sql`
         INSERT INTO users (
             email,
             username,
@@ -76,7 +99,8 @@ async function insertUser(params: {
         )
         RETURNING
             id, email, username, level, exp, avatar_id, title_id, created_at, updated_at
-    `;
+    `) as InsertedUser[];
+
     return rows[0];
 }
 

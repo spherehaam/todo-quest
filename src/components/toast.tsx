@@ -17,7 +17,7 @@ export type ToastItem = {
 
 // 簡易なPubSub。Provider が購読し、showToast から発火する
 // ※ グローバルな Set を利用（アプリ内単一 Provider 前提）
- type Subscriber = (t: ToastItem) => void;
+type Subscriber = (t: ToastItem) => void;
 const subscribers = new Set<Subscriber>();
 
 /**
@@ -43,6 +43,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     const timers = useRef<Map<string, number>>(new Map()); // id -> timeoutId
 
     useEffect(() => {
+        // 注意: cleanup 時の参照ブレを避けるため、ローカルに固定
+        const map = timers.current;
+
         // サブスクライブして、新規トーストをキューへ追加
         const handler: Subscriber = (t) => {
             setToasts((prev) => [...prev, t]);
@@ -50,17 +53,17 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             // 自動クローズ用タイマーをセット
             const id = window.setTimeout(() => {
                 setToasts((prev) => prev.filter((x) => x.id !== t.id));
-                timers.current.delete(t.id);
+                map.delete(t.id);
             }, t.duration ?? 3000);
-            timers.current.set(t.id, id);
+            map.set(t.id, id);
         };
 
         subscribers.add(handler);
         return () => {
             // クリーンアップ（購読解除 & タイマー解除）
             subscribers.delete(handler);
-            timers.current.forEach((id) => clearTimeout(id));
-            timers.current.clear();
+            map.forEach((id) => clearTimeout(id));
+            map.clear();
         };
     }, []);
 
