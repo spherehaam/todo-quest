@@ -450,8 +450,7 @@ export default function HomePage() {
     const router = useRouter();
 
     // フィルタ状態
-    const [statusFilter, setStatusFilter] = useState<'all' | 'not_done' | TaskStatus>('all');
-    // const [statusFilter, setStatusFilter] = useState<'all' | 'not_done' | TaskStatus>('not_done');
+    const [statusFilter, setStatusFilter] = useState<'all' | 'not_done' | TaskStatus>('not_done');
     const [dueFilter, setDueFilter] = useState<DueFilter>('all');
     const [rangeFrom, setRangeFrom] = useState<string>(''); // YYYY-MM-DD
     const [rangeTo, setRangeTo] = useState<string>('');     // YYYY-MM-DD

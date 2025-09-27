@@ -84,7 +84,7 @@ export default function SignupPage() {
         setSubmitting(true);
         try {
             const csrf = readCookie('csrf_token');
-            const res = await fetch('/api/auth/signup', {
+            const res = await fetch('/api/signup', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -103,7 +103,7 @@ export default function SignupPage() {
             }
 
             showToast({ type: 'success', message: 'アカウントを作成しました。ログインしてください。' });
-            router.replace('/login?created=1');
+            router.replace('/login');
         } catch (err) {
             const message = err instanceof Error ? err.message : 'signup_failed';
             showToast({ type: 'error', message });

@@ -33,6 +33,15 @@ function isEmail(v: string): boolean {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 }
 
+/** 安全にエラーメッセージを取り出す */
+function getErrorMessage(err: unknown): string {
+    if (typeof err === 'string') return err;
+    if (err && typeof err === 'object' && 'message' in err && typeof (err as { message?: unknown }).message === 'string') {
+        return (err as { message: string }).message;
+    }
+    return '';
+}
+
 /**
  * 入力検証（サーバー側）
  */
@@ -51,26 +60,32 @@ export function validateSignupInput(input: SignupInput): { ok: true } | { ok: fa
     return { ok: true };
 }
 
+/** 重複チェック用の行型 */
+type DupRow = { email: string; username: string };
+
 /**
  * 既存重複チェック（email / username）
  */
 async function checkUnique(email: string, username: string) {
-    const rows = await sql`
+    const rows = (await sql`
         SELECT email, username
         FROM users
         WHERE email = ${email} OR username = ${username}
-    `;
+    `) as DupRow[];
 
     let emailTaken = false;
     let usernameTaken = false;
 
-    for (const r of rows as any[]) {
+    for (const r of rows) {
         if (r.email === email) emailTaken = true;
         if (r.username === username) usernameTaken = true;
     }
 
     return { emailTaken, usernameTaken };
 }
+
+/** INSERT 戻り値の行型 */
+type InsertRow = { id: string };
 
 /**
  * ユーザー作成。
@@ -95,16 +110,19 @@ export async function createUser(input: SignupInput): Promise<SignupResult> {
     const passwordHash = await bcrypt.hash(input.password, saltRounds);
 
     try {
-        const rows = await sql`
+        const rows = (await sql`
             INSERT INTO users (id, email, username, password_hash, level, exp)
             VALUES (gen_random_uuid(), ${email}, ${username}, ${passwordHash}, 1, 0)
             RETURNING id
-        `;
+        `) as InsertRow[];
 
-        const user = (rows as any[])[0];
+        const user = rows[0];
+        if (!user || !user.id) {
+            return { ok: false, error: 'signup_failed', detail: 'no_id_returned' };
+        }
         return { ok: true, userId: user.id };
-    } catch (err: any) {
-        const msg = typeof err?.message === 'string' ? err.message : '';
+    } catch (err: unknown) {
+        const msg = getErrorMessage(err);
         if (msg.includes('users_email_key')) return { ok: false, error: 'email_taken' };
         if (msg.includes('users_username_key')) return { ok: false, error: 'username_taken' };
         return { ok: false, error: 'signup_failed', detail: msg };
