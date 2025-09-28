@@ -50,6 +50,12 @@ export default function Footer() {
                     >
                         プライバシー
                     </Link>
+                    <Link
+                        href="/license"
+                        className="transition underline-offset-4 hover:underline hover:text-blue-600 dark:hover:text-blue-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 rounded-sm"
+                    >
+                        ライセンス
+                    </Link>
                 </nav>
 
                 {/* コピーライト表記 */}

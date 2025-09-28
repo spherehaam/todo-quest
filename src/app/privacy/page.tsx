@@ -26,9 +26,12 @@ export default function PrivacyPage() {
                     学習目的のため、データの永続性やセキュリティを商用水準で保証するものではありません。
                     機能検証や不具合対応の過程でデータが消失する可能性があります。
                 </p>
+                <p>
+                    ※公開デモのため、パスワードや本名など重要な個人情報は入力しないでください。
+                </p>
             </section>
 
-            <p className="text-sm text-gray-500">最終更新日: 2025-08-31</p>
+            <p className="text-sm text-gray-500">最終更新日: 2025-09-28</p>
         </main>
     );
 }

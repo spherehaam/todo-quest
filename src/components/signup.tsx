@@ -224,6 +224,8 @@ export default function SignupPage() {
                     <Link href="/terms" className="underline underline-offset-2 hover:opacity-80">利用規約</Link>{' '}
                     と{' '}
                     <Link href="/privacy" className="underline underline-offset-2 hover:opacity-80">プライバシー</Link>{' '}
+                    と{' '}
+                    <Link href="/license" className="underline underline-offset-2 hover:opacity-80">ライセンス</Link>{' '}
                     に同意したものとみなされます。
                 </p>
             </div>
