@@ -66,7 +66,7 @@ export default function SignupPage() {
     const errors = useMemo(() => {
         const e: string[] = [];
         if (!email || !isEmail(email)) e.push('メールアドレスの形式が正しくありません。');
-        if (!username || username.trim().length < 3) e.push('ユーザー名は3文字以上で入力してください。');
+        if (!username) e.push('ユーザー名を入力してください。');
         if (!password || password.length < 8) e.push('パスワードは8文字以上で入力してください。');
         if (password !== confirm) e.push('パスワード（確認）が一致しません。');
         return e;
@@ -131,7 +131,16 @@ export default function SignupPage() {
                             autoComplete="email"
                             className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 outline-none ring-0 focus:border-slate-400 focus:ring-0 dark:border-slate-700 dark:bg-slate-900"
                             value={email}
-                            onChange={(e) => setEmail(e.target.value)}
+                            onChange={(e) => {
+                                const next = e.target.value;
+                                setEmail(next);
+                                if (username.trim() === '' && next) {
+                                    const local = next.split('@')[0] ?? '';
+                                    if (local) {
+                                        setUsername(local);
+                                    }
+                                }
+                            }}
                             required
                         />
                     </div>

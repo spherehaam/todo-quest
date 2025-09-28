@@ -144,34 +144,67 @@ async function dbUpdateTaskStatusAndApplyReward(params: {
 
     const rows = await sql`
         WITH RECURSIVE
-        updated AS (
-            UPDATE tasks
-            SET status = ${newStatus}, updated_at = now()
+        -- 1) 事前に対象タスクの旧値を取得（FOR UPDATEでロック）
+        pre AS (
+            SELECT id, contractor, status, first_completed, reward
+            FROM tasks
             WHERE id = ${taskId}
-              AND contractor = ${userId}
-              AND status IS DISTINCT FROM ${newStatus}
-            RETURNING id, status, reward
+            FOR UPDATE
         ),
+
+        -- 2) ステータス更新。done化かつ旧値がfalseのときだけ first_completed を true にする
+        updated AS (
+            UPDATE tasks t
+            SET
+                status = ${newStatus},
+                first_completed = CASE
+                    WHEN ${newStatus} = 'done' AND COALESCE(p.first_completed, false) = false
+                        THEN true
+                    ELSE t.first_completed
+                END,
+                updated_at = now()
+            FROM pre p
+            WHERE t.id = p.id
+            AND p.contractor = ${userId}
+            AND p.status IS DISTINCT FROM ${newStatus}
+            RETURNING
+                t.id,
+                t.status,
+                t.reward,
+                t.first_completed,
+                -- 初回完了かどうか（旧値false → 新値true）をフラグ化
+                CASE
+                    WHEN ${newStatus} = 'done' AND COALESCE(p.first_completed, false) = false
+                        THEN true
+                    ELSE false
+                END AS did_first_complete
+        ),
+
+        -- 3) ユーザー現状値
         base_user AS (
             SELECT id, level, exp
             FROM users
             WHERE id = ${userId}
         ),
+
+        -- 4) 今回加算するEXP（初回完了のときだけ reward を加算）
         calc AS (
             SELECT
                 b.id,
                 b.level,
                 b.exp
-                    + CASE WHEN (SELECT status = 'done' FROM updated LIMIT 1)
-                           THEN COALESCE((SELECT reward FROM updated LIMIT 1), 0)
-                           ELSE 0
-                      END AS exp_after,
-                CASE WHEN (SELECT status = 'done' FROM updated LIMIT 1)
-                     THEN COALESCE((SELECT reward FROM updated LIMIT 1), 0)
-                     ELSE 0
+                    + CASE WHEN (SELECT did_first_complete FROM updated LIMIT 1)
+                        THEN COALESCE((SELECT reward FROM updated LIMIT 1), 0)
+                        ELSE 0
+                    END AS exp_after,
+                CASE WHEN (SELECT did_first_complete FROM updated LIMIT 1)
+                    THEN COALESCE((SELECT reward FROM updated LIMIT 1), 0)
+                    ELSE 0
                 END AS added
             FROM base_user b
         ),
+
+        -- 5) 必要累計EXPに基づく多段レベルアップ計算（再帰）
         lvl AS (
             -- anchor
             SELECT
@@ -189,8 +222,10 @@ async function dbUpdateTaskStatusAndApplyReward(params: {
                 (SELECT required_total_exp FROM levels WHERE level = l.cur_level + 1 LIMIT 1) AS req
             FROM lvl l
             WHERE COALESCE(l.req, 2147483647) > 0
-              AND l.cur_exp >= COALESCE(l.req, 2147483647)
+            AND l.cur_exp >= COALESCE(l.req, 2147483647)
         ),
+
+        -- 6) 最終の新レベル・新EXP
         final AS (
             SELECT
                 c.id,
@@ -205,6 +240,8 @@ async function dbUpdateTaskStatusAndApplyReward(params: {
                 c.added
             FROM calc c
         ),
+
+        /* 7) ユーザーに反映（初回完了のときだけ） */
         applied AS (
             UPDATE users u
             SET level = f.new_level,
@@ -212,12 +249,15 @@ async function dbUpdateTaskStatusAndApplyReward(params: {
                 updated_at = now()
             FROM final f
             WHERE u.id = f.id
-              AND (SELECT status = 'done' FROM updated LIMIT 1)
+            AND (SELECT did_first_complete FROM updated LIMIT 1)
             RETURNING u.id, u.level, u.exp, f.added
         )
+
+        /* 8) 返却値（タスク更新の有無／新ステータス／加算EXP／新レベル・新EXP） */
         SELECT
             (SELECT id FROM updated LIMIT 1) AS task_id,
             (SELECT status FROM updated LIMIT 1) AS new_status,
+            (SELECT did_first_complete FROM updated LIMIT 1) AS did_first_complete,
             (SELECT added FROM final LIMIT 1) AS reward_added,
             (SELECT level FROM applied LIMIT 1) AS new_level,
             (SELECT exp FROM applied LIMIT 1) AS new_exp
