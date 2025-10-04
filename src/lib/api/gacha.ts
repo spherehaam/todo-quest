@@ -2,6 +2,7 @@ export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
+import { readAccessTokenFromCookie, verifyAccess } from '@/lib/auth/common';
 
 /** --- 型定義 --- */
 type Rarity = 'N' | 'R' | 'SR' | 'SSR';
@@ -30,6 +31,9 @@ type PoolRow = {
     end_at: string;
 };
 
+type TicketsRow = {
+    gacha_tickets: number;
+};
 
 /** キャッシュ抑止ヘッダ */
 const NO_STORE = { 'Cache-Control': 'no-store' as const };
@@ -142,6 +146,15 @@ async function pickOne(poolId: string, rarityFilter?: Rarity): Promise<RowItem |
  */
 export async function handleGetGacha(req: Request) {
     try {
+        // 1) 認証チェック
+        const token = await readAccessTokenFromCookie();
+        if (!token) {
+            return NextResponse.json(
+                { ok: false, error: 'no_auth' as const },
+                { status: 401, headers: NO_STORE }
+            );
+        }
+
         // --- クエリパラメータ取得 ---
         const url = new URL(req.url);
         const countParam = url.searchParams.get('count');
@@ -222,6 +235,50 @@ export async function handleGetGacha(req: Request) {
         console.error('handleGetGacha failed:', err);
         return NextResponse.json(
             { ok: false, error: 'server_error', detail: '予期せぬサーバーエラーが発生しました。' },
+            { status: 500, headers: NO_STORE }
+        );
+    }
+}
+
+/**
+ * GET /api/gacha/me
+ * - Cookie のアクセストークンを検証
+ * - users テーブルから現在のガチャチケット枚数を取得
+ * - { ok: true, tickets } を返す（キャッシュ禁止）
+ */
+export async function handleGetGachaMe() {
+    try {
+        // 1) 認証チェック
+        const token = await readAccessTokenFromCookie();
+        if (!token) {
+            return NextResponse.json(
+                { ok: false, error: 'no_auth' as const },
+                { status: 401, headers: NO_STORE }
+            );
+        }
+
+        const payload = (await verifyAccess(token)) as { sub: string };
+        const userId = payload.sub;
+
+        // 2) DB 取得（型は as で明示）
+        const rows = (await sql`
+            SELECT COALESCE(gacha_tickets, 0) AS gacha_tickets
+            FROM users
+            WHERE id = ${userId}
+            LIMIT 1
+        `) as unknown as TicketsRow[];
+
+        const tickets = rows.length > 0 ? rows[0].gacha_tickets : 0;
+
+        // 3) 成功レスポンス
+        return NextResponse.json(
+            { ok: true as const, tickets },
+            { status: 200, headers: NO_STORE }
+        );
+    } catch (err) {
+        console.error('handleGetGachaMe failed:', err);
+        return NextResponse.json(
+            { ok: false, error: 'server_error' as const },
             { status: 500, headers: NO_STORE }
         );
     }
