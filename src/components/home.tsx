@@ -453,7 +453,7 @@ export default function HomePage() {
     const [statusFilter, setStatusFilter] = useState<'all' | 'not_done' | TaskStatus>('not_done');
     const [dueFilter, setDueFilter] = useState<DueFilter>('all');
     const [rangeFrom, setRangeFrom] = useState<string>(''); // YYYY-MM-DD
-    const [rangeTo, setRangeTo] = useState<string>('');     // YYYY-MM-DD
+    const [rangeTo, setRangeTo] = useState<string>(''); // YYYY-MM-DD
 
     // モーダル
     const [isCreateOpen, setCreateOpen] = useState(false);

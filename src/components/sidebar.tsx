@@ -69,6 +69,13 @@ export default function Sidebar() {
                     <span aria-hidden>📋</span> <span>タスク掲示板</span>
                 </Link>
 
+                <Link
+                    href="/gacha"
+                    className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 dark:hover:bg-gray-800"
+                >
+                    <span aria-hidden>📋</span> <span>ガチャ</span>
+                </Link>
+
                 <div className="my-3 border-t border-dashed border-gray-200 dark:border-gray-800" />
             </nav>
         </aside>
