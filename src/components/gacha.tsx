@@ -255,7 +255,6 @@ async function pullGacha(count: 1 | 10): Promise<PullResult> {
 
 /** --- 型ガード：/api/gacha/me の成功形 --- */
 function isTicketsOK(x: unknown): x is TicketsAPIResponseOK {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return !!x && typeof x === 'object' && (x as any).ok === true && typeof (x as any).tickets === 'number';
 }
 
@@ -272,7 +271,6 @@ async function fetchTickets(): Promise<number> {
 
         // 別キー（gacha_tickets）で返る場合のフォールバック
         if (res.ok && json && typeof json === 'object' && 'gacha_tickets' in json) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const t = (json as any).gacha_tickets;
             if (typeof t === 'number' && Number.isFinite(t) && t >= 0) return t;
         }
