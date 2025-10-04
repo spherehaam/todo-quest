@@ -23,6 +23,14 @@ type FrontItem = {
     amount?: number;
 };
 
+type PoolRow = {
+    id: string;
+    slug: string;
+    guarantee_min_rarity: Rarity | null;
+    end_at: string;
+};
+
+
 /** キャッシュ抑止ヘッダ */
 const NO_STORE = { 'Cache-Control': 'no-store' as const };
 
@@ -42,24 +50,20 @@ function pickAmount(min: number | null, max: number | null): number | undefined 
  * poolSlug が指定されていれば優先。
  * なければ default-2025 を優先して最も終了が近いプールを返す。
  */
-async function fetchActivePool(poolSlug?: string): Promise<
-    | { id: string; slug: string; guarantee_min_rarity: Rarity | null; end_at: string }
-    | null
-> {
+async function fetchActivePool(poolSlug?: string): Promise<PoolRow | null> {
     if (poolSlug) {
-        const rows = await sql`
+        const rows = (await sql`
             SELECT id, slug, guarantee_min_rarity, end_at
             FROM gacha_pools
             WHERE slug = ${poolSlug}
               AND is_active = TRUE
               AND now() BETWEEN start_at AND end_at
             LIMIT 1
-        `;
-        if (rows.length > 0) return rows[0] as any;
+        `) as unknown as PoolRow[];
+        if (rows.length > 0) return rows[0];
     }
 
-    // 有効プールの中で default-2025 を優先し、最も終了が近いもの
-    const prioritized = await sql`
+    const prioritized = (await sql`
         WITH active AS (
             SELECT id, slug, guarantee_min_rarity, end_at,
                    (slug = 'default-2025') AS is_default
@@ -71,9 +75,11 @@ async function fetchActivePool(poolSlug?: string): Promise<
         FROM active
         ORDER BY is_default DESC, end_at ASC
         LIMIT 1
-    `;
-    return (prioritized[0] as any) ?? null;
+    `) as unknown as PoolRow[];
+
+    return prioritized[0] ?? null;
 }
+
 
 /**
  * 通常抽選候補が存在するかチェック
