@@ -23,7 +23,6 @@ type PullAPIResponse =
 
 type TicketsAPIResponseOK = { ok: true; tickets: number };
 type TicketsAPIResponseNG = { ok: false; error: string; detail?: string };
-type TicketsAPIResponse = TicketsAPIResponseOK | TicketsAPIResponseNG;
 
 /** --- レア度ごとの装飾設定 --- */
 const RARITY_DECOR: Record<
@@ -145,14 +144,10 @@ function ItemCard({ item, highlight }: { item: GachaItem; highlight?: boolean })
                 highlight ? deco.glow : ''
             }`}
         >
-            <span
-                className={`absolute -top-2 right-2 rounded-full px-2 py-0.5 text-xs ${deco.badge}`}
-            >
+            <span className={`absolute -top-2 right-2 rounded-full px-2 py-0.5 text-xs ${deco.badge}`}>
                 {deco.label}
             </span>
-            <div
-                className={`mb-3 grid h-24 w-24 place-content-center rounded-2xl bg-gray-50 text-3xl dark:bg-gray-900 ${deco.ring}`}
-            >
+            <div className={`mb-3 grid h-24 w-24 place-content-center rounded-2xl bg-gray-50 text-3xl dark:bg-gray-900 ${deco.ring}`}>
                 🎁
             </div>
             <div className={`mb-1 line-clamp-2 text-sm font-semibold ${deco.text}`}>
@@ -192,20 +187,9 @@ function SkeletonCard() {
     );
 }
 
-function SkeletonGrid({ count }: { count: number }) {
-    return (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-            {Array.from({ length: count }).map((_, i) => (
-                <SkeletonCard key={i} />
-            ))}
-        </div>
-    );
-}
-
-function PullingEffect({ count }: { count: number }) {
+function PullingEffect() {
     return (
         <div className="mt-2">
-            {/* 中央スピナー＋きらめき */}
             <div className="flex flex-col items-center justify-center gap-3 py-6">
                 <div className="relative h-14 w-14">
                     <div className="absolute inset-0 animate-spin rounded-full border-4 border-indigo-300 border-t-transparent" />
@@ -215,8 +199,6 @@ function PullingEffect({ count }: { count: number }) {
                     <span className="animate-ellipsis">演出中</span>
                 </div>
             </div>
-
-            {/* 局所CSS */}
             <style jsx>{`
                 .animate-ellipsis::after {
                     display: inline-block;
@@ -237,6 +219,57 @@ function PullingEffect({ count }: { count: number }) {
 }
 /** ====== /演出中 UI ====== */
 
+/** ====== ページ初期ロード用スケルトン ====== */
+function PageSkeleton() {
+    return (
+        <div className="space-y-4" aria-busy="true" aria-live="polite">
+            <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="h-5 w-20 animate-shimmer rounded-md bg-gray-200 dark:bg-gray-800" />
+                    <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 dark:border-gray-800 dark:bg-gray-950">
+                        <div className="h-4 w-12 animate-shimmer rounded bg-gray-200 dark:bg-gray-800" />
+                        <div className="h-4 w-8 animate-shimmer rounded bg-gray-200 dark:bg-gray-800" />
+                    </div>
+                </div>
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div className="h-12 animate-shimmer rounded-xl bg-gray-200 dark:bg-gray-800" />
+                    <div className="h-12 animate-shimmer rounded-xl bg-gray-200 dark:bg-gray-800" />
+                    <div className="h-12 animate-shimmer rounded-xl bg-gray-100 dark:bg-gray-900 border border-dashed border-gray-300 dark:border-gray-700" />
+                </div>
+            </section>
+
+            <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+                <div className="mb-3 h-4 w-24 animate-shimmer rounded bg-gray-200 dark:bg-gray-800" />
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                    {Array.from({ length: 8 }).map((_, i) => (
+                        <SkeletonCard key={i} />
+                    ))}
+                </div>
+            </section>
+
+            {/* ローカルCSS：シマー */}
+            <style jsx>{`
+                .animate-shimmer {
+                    position: relative;
+                    overflow: hidden;
+                }
+                .animate-shimmer::after {
+                    content: '';
+                    position: absolute;
+                    inset: 0;
+                    transform: translateX(-100%);
+                    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
+                    animation: shimmer 1.6s infinite;
+                }
+                @keyframes shimmer {
+                    100% { transform: translateX(100%); }
+                }
+            `}</style>
+        </div>
+    );
+}
+/** ====== /ページ初期ロード用スケルトン ====== */
+
 /** --- API呼び出し（ガチャ実行） --- */
 async function pullGacha(count: 1 | 10): Promise<PullResult> {
     const res = await fetch(`/api/gacha?count=${count}`, { method: 'GET', cache: 'no-store' });
@@ -253,9 +286,11 @@ async function pullGacha(count: 1 | 10): Promise<PullResult> {
     return json.result;
 }
 
-/** --- 型ガード：/api/gacha/me の成功形 --- */
+/** --- 型ガード：/api/gacha/me の成功形（any なし） --- */
 function isTicketsOK(x: unknown): x is TicketsAPIResponseOK {
-    return !!x && typeof x === 'object' && (x as any).ok === true && typeof (x as any).tickets === 'number';
+    if (typeof x !== 'object' || x === null) return false;
+    const obj = x as Record<string, unknown>;
+    return obj.ok === true && typeof obj.tickets === 'number';
 }
 
 /** 初回にチケット枚数を取得（/api/gacha/me を想定） */
@@ -269,15 +304,16 @@ async function fetchTickets(): Promise<number> {
             return json.tickets;
         }
 
-        // 別キー（gacha_tickets）で返る場合のフォールバック
-        if (res.ok && json && typeof json === 'object' && 'gacha_tickets' in json) {
-            const t = (json as any).gacha_tickets;
-            if (typeof t === 'number' && Number.isFinite(t) && t >= 0) return t;
+        // 別キー（gacha_tickets）で返る場合のフォールバック（any なし）
+        if (res.ok && typeof json === 'object' && json !== null) {
+            const obj = json as Record<string, unknown>;
+            if (typeof obj.gacha_tickets === 'number' && Number.isFinite(obj.gacha_tickets)) {
+                return obj.gacha_tickets;
+            }
         }
     } catch {
         // 無視してフォールバックへ
     }
-    // 失敗時は 10 をデフォルトに
     return 0;
 }
 
@@ -287,7 +323,7 @@ export default function Gacha() {
     const [pendingCount, setPendingCount] = useState<1 | 10 | null>(null);
     const [lastResult, setLastResult] = useState<PullResult | null>(null);
     const [isResultOpen, setResultOpen] = useState(false);
-    const [tickets, setTickets] = useState<number>(0);
+    const [tickets, setTickets] = useState<number>(10);
     const [loadingTickets, setLoadingTickets] = useState<boolean>(true);
     const [flashRainbow, setFlashRainbow] = useState(false);
 
@@ -320,7 +356,7 @@ export default function Gacha() {
             setPendingCount(count);
             setPulling(true);
             setResultOpen(true);
-            setLastResult(null); // 前回結果を一旦クリア
+            setLastResult(null);
 
             try {
                 const result = await pullGacha(count);
@@ -330,7 +366,6 @@ export default function Gacha() {
                 const hasSSR = result.items.some((i) => i.rarity === 'SSR');
                 if (hasSSR) {
                     setFlashRainbow(true);
-                    // 900ms 後に自動でフラッシュ解除
                     setTimeout(() => setFlashRainbow(false), 900);
                 }
 
@@ -355,6 +390,11 @@ export default function Gacha() {
         return [...lastResult.items].sort((a, b) => order[a.rarity] - order[b.rarity]);
     }, [lastResult]);
 
+    /** 初回ロード中はページスケルトン */
+    if (loadingTickets) {
+        return <PageSkeleton />;
+    }
+
     return (
         <div className="space-y-4">
             {/* ガチャヘッダー */}
@@ -363,13 +403,7 @@ export default function Gacha() {
                     <h2 className="text-sm font-semibold">ガチャ</h2>
                     <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm dark:border-gray-800 dark:bg-gray-950">
                         <span className="text-gray-500">チケット</span>
-                        {loadingTickets ? (
-                            <span className="inline-flex items-center gap-2 text-gray-400">
-                                <span className="h-3 w-10 animate-pulse rounded bg-gray-200 dark:bg-gray-800" />
-                            </span>
-                        ) : (
-                            <span className="font-semibold">{tickets}</span>
-                        )}
+                        <span className="font-semibold">{tickets}</span>
                     </div>
                 </div>
 
@@ -377,7 +411,7 @@ export default function Gacha() {
                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <button
                         type="button"
-                        disabled={pulling || loadingTickets}
+                        disabled={pulling}
                         onClick={() => handlePull(1)}
                         className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-4 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70"
                     >
@@ -385,7 +419,7 @@ export default function Gacha() {
                     </button>
                     <button
                         type="button"
-                        disabled={pulling || loadingTickets}
+                        disabled={pulling}
                         onClick={() => handlePull(10)}
                         className="rounded-xl bg-gradient-to-r from-rose-600 to-orange-500 px-5 py-4 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70"
                     >
@@ -402,14 +436,14 @@ export default function Gacha() {
                 </div>
             </section>
 
-            {/* 結果モーダル：演出→結果へ切替（SSR時は虹色フラッシュ） */}
+            {/* 結果モーダル */}
             <Modal
                 open={isResultOpen}
                 onClose={() => setResultOpen(false)}
                 title="ガチャ結果"
                 flash={flashRainbow}
             >
-                {pulling && <PullingEffect count={pendingCount ?? 10} />}
+                {pulling && <PullingEffect />}
 
                 {!pulling && lastResult && (
                     <div className="space-y-4">
