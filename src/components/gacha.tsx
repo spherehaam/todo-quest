@@ -3,6 +3,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { showToast } from '@/components/toast';
 
+/**
+ * ------------------------------------------------------------
+ * ガチャ画面（クライアントコンポーネント）
+ * - 単発 / 10連の実行
+ * - 実行中のスケルトン/演出
+ * - 結果モーダル表示
+ * - 所持チケットの取得
+ * ------------------------------------------------------------
+ */
+
 /** --- 型定義 --- */
 export type Rarity = 'SSR' | 'SR' | 'R' | 'N';
 
@@ -22,9 +32,15 @@ type PullAPIResponse =
     | { ok: false; error: string; detail?: string };
 
 type TicketsAPIResponseOK = { ok: true; tickets: number };
-type TicketsAPIResponseNG = { ok: false; error: string; detail?: string };
 
-/** --- レア度ごとの装飾設定 --- */
+/**
+ * レア度の並び順（表示用）
+ */
+const RARITY_ORDER: Record<Rarity, number> = { SSR: 0, SR: 1, R: 2, N: 3 };
+
+/**
+ * レア度ごとの装飾設定
+ */
 const RARITY_DECOR: Record<
     Rarity,
     { label: string; ring: string; glow: string; text: string; badge: string }
@@ -59,7 +75,9 @@ const RARITY_DECOR: Record<
     },
 };
 
-/** --- モーダル（虹色フラッシュ対応） --- */
+/**
+ * 汎用モーダル
+ */
 function Modal({
     open,
     onClose,
@@ -74,6 +92,7 @@ function Modal({
     flash?: boolean;
 }) {
     if (!open) return null;
+
     return (
         <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
@@ -86,10 +105,9 @@ function Modal({
                 className="relative w-full max-w-5xl overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"
                 onMouseDown={(e) => e.stopPropagation()}
             >
-                {/* 虹色フラッシュオーバーレイ（必要時のみアニメ） */}
+                {/* モーダル全体に虹色フラッシュ（SSR時） */}
                 <div className={`pointer-events-none absolute inset-0 ${flash ? 'modal-rainbow-flash' : ''}`} />
 
-                {/* ヘッダー／本文は前面に */}
                 {title && (
                     <div className="relative z-10 flex items-center justify-between border-b border-gray-200 p-4 dark:border-gray-800">
                         <h3 className="text-base font-semibold">{title}</h3>
@@ -102,9 +120,10 @@ function Modal({
                         </button>
                     </div>
                 )}
+
                 <div className="relative z-10 p-4">{children}</div>
 
-                {/* モーダル内ローカル CSS */}
+                {/* モーダル内スタイル */}
                 <style jsx>{`
                     @keyframes rainbowFlash {
                         0% { opacity: 0; }
@@ -135,9 +154,12 @@ function Modal({
     );
 }
 
-/** --- 単一カード --- */
+/**
+ * アイテムカード（1つ分）
+ */
 function ItemCard({ item, highlight }: { item: GachaItem; highlight?: boolean }) {
     const deco = RARITY_DECOR[item.rarity];
+
     return (
         <div
             className={`relative flex flex-col items-center justify-center rounded-2xl border border-gray-200 bg-white p-4 text-center shadow-sm transition dark:border-gray-800 dark:bg-gray-950 ${
@@ -147,12 +169,15 @@ function ItemCard({ item, highlight }: { item: GachaItem; highlight?: boolean })
             <span className={`absolute -top-2 right-2 rounded-full px-2 py-0.5 text-xs ${deco.badge}`}>
                 {deco.label}
             </span>
+
             <div className={`mb-3 grid h-24 w-24 place-content-center rounded-2xl bg-gray-50 text-3xl dark:bg-gray-900 ${deco.ring}`}>
                 🎁
             </div>
+
             <div className={`mb-1 line-clamp-2 text-sm font-semibold ${deco.text}`}>
                 {item.name}
             </div>
+
             {typeof item.amount === 'number' && (
                 <div className="text-xs text-gray-500 dark:text-gray-400">×{item.amount}</div>
             )}
@@ -160,7 +185,9 @@ function ItemCard({ item, highlight }: { item: GachaItem; highlight?: boolean })
     );
 }
 
-/** --- 結果グリッド --- */
+/**
+ * 結果グリッド（複数アイテム）
+ */
 function ResultGrid({ items }: { items: GachaItem[] }) {
     return (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
@@ -175,7 +202,7 @@ function ResultGrid({ items }: { items: GachaItem[] }) {
     );
 }
 
-/** ====== 「演出中...」 UI ====== */
+/** スケルトン（カード1枚） */
 function SkeletonCard() {
     return (
         <div className="relative flex flex-col items-center justify-center rounded-2xl border border-gray-200 bg-white p-4 text-center shadow-sm dark:border-gray-800 dark:bg-gray-950">
@@ -187,6 +214,7 @@ function SkeletonCard() {
     );
 }
 
+/** 実行中エフェクト */
 function PullingEffect() {
     return (
         <div className="mt-2">
@@ -217,9 +245,8 @@ function PullingEffect() {
         </div>
     );
 }
-/** ====== /演出中 UI ====== */
 
-/** ====== ページ初期ロード用スケルトン ====== */
+/** ページ全体のスケルトン */
 function PageSkeleton() {
     return (
         <div className="space-y-4" aria-busy="true" aria-live="polite">
@@ -234,7 +261,7 @@ function PageSkeleton() {
                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <div className="h-12 animate-shimmer rounded-xl bg-gray-200 dark:bg-gray-800" />
                     <div className="h-12 animate-shimmer rounded-xl bg-gray-200 dark:bg-gray-800" />
-                    <div className="h-12 animate-shimmer rounded-xl bg-gray-100 dark:bg-gray-900 border border-dashed border-gray-300 dark:border-gray-700" />
+                    <div className="h-12 animate-shimmer rounded-xl border border-dashed border-gray-300 bg-gray-100 dark:border-gray-700 dark:bg-gray-900" />
                 </div>
             </section>
 
@@ -247,30 +274,25 @@ function PageSkeleton() {
                 </div>
             </section>
 
-            {/* ローカルCSS：シマー */}
             <style jsx>{`
-                .animate-shimmer {
-                    position: relative;
-                    overflow: hidden;
-                }
+                .animate-shimmer { position: relative; overflow: hidden; }
                 .animate-shimmer::after {
                     content: '';
-                    position: absolute;
-                    inset: 0;
+                    position: absolute; inset: 0;
                     transform: translateX(-100%);
                     background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
                     animation: shimmer 1.6s infinite;
                 }
-                @keyframes shimmer {
-                    100% { transform: translateX(100%); }
-                }
+                @keyframes shimmer { 100% { transform: translateX(100%); } }
             `}</style>
         </div>
     );
 }
-/** ====== /ページ初期ロード用スケルトン ====== */
 
-/** --- API呼び出し（ガチャ実行） --- */
+/**
+ * API: ガチャを引く
+ * @param count 1（単発）または 10（10連）
+ */
 async function pullGacha(count: 1 | 10): Promise<PullResult> {
     const res = await fetch(`/api/gacha?count=${count}`, { method: 'GET', cache: 'no-store' });
     const json = (await res.json()) as PullAPIResponse;
@@ -286,48 +308,53 @@ async function pullGacha(count: 1 | 10): Promise<PullResult> {
     return json.result;
 }
 
-/** --- 型ガード：/api/gacha/me の成功形（any なし） --- */
+/**
+ * APIレスポンスが TicketsAPIResponseOK かどうかの型ガード
+ */
 function isTicketsOK(x: unknown): x is TicketsAPIResponseOK {
     if (typeof x !== 'object' || x === null) return false;
     const obj = x as Record<string, unknown>;
     return obj.ok === true && typeof obj.tickets === 'number';
 }
 
-/** 初回にチケット枚数を取得（/api/gacha/me を想定） */
+/**
+ * API: 所持チケットの取得
+ * - /api/gacha/me の仕様差分（gacha_tickets）にも暫定対応
+ */
 async function fetchTickets(): Promise<number> {
     try {
         const res = await fetch('/api/gacha/me', { method: 'GET', cache: 'no-store' });
         const json = (await res.json()) as unknown;
 
-        // 想定レスポンス: { ok: true, tickets: number }
         if (res.ok && isTicketsOK(json)) {
             return json.tickets;
         }
 
-        // 別キー（gacha_tickets）で返る場合のフォールバック（any なし）
         if (res.ok && typeof json === 'object' && json !== null) {
             const obj = json as Record<string, unknown>;
             if (typeof obj.gacha_tickets === 'number' && Number.isFinite(obj.gacha_tickets)) {
-                return obj.gacha_tickets;
+                return obj.gacha_tickets as number;
             }
         }
     } catch {
-        // 無視してフォールバックへ
+        // 通信失敗時は 0 を返す（上位でスケルトン→0枚表示へ）
     }
     return 0;
 }
 
-/** --- メインコンポーネント --- */
+/**
+ * メイン：ガチャ画面
+ */
 export default function Gacha() {
-    const [pulling, setPulling] = useState(false);
-    const [pendingCount, setPendingCount] = useState<1 | 10 | null>(null);
-    const [lastResult, setLastResult] = useState<PullResult | null>(null);
-    const [isResultOpen, setResultOpen] = useState(false);
-    const [tickets, setTickets] = useState<number>(10);
-    const [loadingTickets, setLoadingTickets] = useState<boolean>(true);
-    const [flashRainbow, setFlashRainbow] = useState(false);
+    const [pulling, setPulling] = useState(false); // 実行中フラグ
+    const [pendingCount, setPendingCount] = useState<1 | 10 | null>(null); // 実行予約の回数
+    const [lastResult, setLastResult] = useState<PullResult | null>(null); // 最新結果
+    const [isResultOpen, setResultOpen] = useState(false); // モーダル開閉
+    const [tickets, setTickets] = useState<number>(10); // 所持チケット
+    const [loadingTickets, setLoadingTickets] = useState<boolean>(true); // 取得中か
+    const [flashRainbow, setFlashRainbow] = useState(false); // SSR時のフラッシュ
 
-    // 初回に保持チケット枚数を取得
+    // 初回：チケット取得
     useEffect(() => {
         let cancelled = false;
         (async () => {
@@ -343,7 +370,9 @@ export default function Gacha() {
         };
     }, []);
 
-    /** ガチャ実行：先にモーダルを開き、演出→結果へ切替（SSR時に虹色フラッシュ） */
+    /**
+     * ガチャ実行ハンドラ
+     */
     const handlePull = useCallback(
         async (count: 1 | 10) => {
             const need = count === 10 ? 10 : 1;
@@ -352,7 +381,6 @@ export default function Gacha() {
                 return;
             }
 
-            // 先にモーダルを開いて演出開始
             setPendingCount(count);
             setPulling(true);
             setResultOpen(true);
@@ -383,53 +411,58 @@ export default function Gacha() {
         [tickets]
     );
 
-    /** SSR優先で並べ替え（表示用） */
+    /**
+     * 結果をレア度順に並べ替えてメモ化
+     */
     const sortedLastItems = useMemo(() => {
         if (!lastResult?.items) return [];
-        const order: Record<Rarity, number> = { SSR: 0, SR: 1, R: 2, N: 3 };
-        return [...lastResult.items].sort((a, b) => order[a.rarity] - order[b.rarity]);
+        return [...lastResult.items].sort((a, b) => RARITY_ORDER[a.rarity] - RARITY_ORDER[b.rarity]);
     }, [lastResult]);
 
-    /** 初回ロード中はページスケルトン */
+    // --- 描画 ---
     if (loadingTickets) {
         return <PageSkeleton />;
     }
 
     return (
         <div className="space-y-4">
-            {/* ガチャヘッダー */}
+            {/* 操作セクション */}
             <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <h2 className="text-sm font-semibold">ガチャ</h2>
                     <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm dark:border-gray-800 dark:bg-gray-950">
                         <span className="text-gray-500">チケット</span>
-                        <span className="font-semibold">{tickets}</span>
+                        <span className="font-semibold" aria-live="polite">{tickets}</span>
                     </div>
                 </div>
 
-                {/* ガチャボタン群 */}
                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <button
                         type="button"
                         disabled={pulling}
                         onClick={() => handlePull(1)}
                         className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-4 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70"
+                        aria-disabled={pulling}
                     >
                         単発
                     </button>
+
                     <button
                         type="button"
                         disabled={pulling}
                         onClick={() => handlePull(10)}
                         className="rounded-xl bg-gradient-to-r from-rose-600 to-orange-500 px-5 py-4 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70"
+                        aria-disabled={pulling}
                     >
                         10連
                     </button>
+
                     <button
                         type="button"
                         disabled
                         className="rounded-xl border border-gray-200 bg-white px-5 py-4 text-sm font-semibold text-gray-400 shadow-sm dark:border-gray-800 dark:bg-gray-950"
                         title="シンプル版では未実装"
+                        aria-disabled="true"
                     >
                         提供割合・ピックアップ（未）
                     </button>
