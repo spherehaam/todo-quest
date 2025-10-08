@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { showToast } from '@/components/toast';
 
 /**
@@ -10,6 +10,7 @@ import { showToast } from '@/components/toast';
  * - 実行中のスケルトン/演出
  * - 結果モーダル表示
  * - 所持チケットの取得
+ * - 履歴（最新15個）の表示
  * ------------------------------------------------------------
  */
 
@@ -32,6 +33,9 @@ type PullAPIResponse =
     | { ok: false; error: string; detail?: string };
 
 type TicketsAPIResponseOK = { ok: true; tickets: number };
+
+type HistoryAPIResponseOK = { ok: true; items: GachaItem[] };
+type HistoryAPIResponseNG = { ok: false; error: string; detail?: string };
 
 /**
  * レア度の並び順（表示用）
@@ -75,6 +79,30 @@ const RARITY_DECOR: Record<
     },
 };
 
+/** 共通：レア度で並べ替え */
+function sortByRarity(items: GachaItem[]): GachaItem[] {
+    return [...items].sort((a, b) => RARITY_ORDER[a.rarity] - RARITY_ORDER[b.rarity]);
+}
+
+/** --- 型ガード --- */
+function isTicketsOK(x: unknown): x is TicketsAPIResponseOK {
+    if (typeof x !== 'object' || x === null) return false;
+    const obj = x as Record<string, unknown>;
+    return obj.ok === true && typeof obj.tickets === 'number';
+}
+
+function isHistoryOK(x: unknown): x is HistoryAPIResponseOK {
+    if (typeof x !== 'object' || x === null) return false;
+    const obj = x as Record<string, unknown>;
+    return obj.ok === true && Array.isArray(obj.items);
+}
+
+function isHistoryNG(x: unknown): x is HistoryAPIResponseNG {
+    if (typeof x !== 'object' || x === null) return false;
+    const obj = x as Record<string, unknown>;
+    return obj.ok === false && typeof obj.error === 'string';
+}
+
 /**
  * 汎用モーダル
  */
@@ -88,7 +116,7 @@ function Modal({
     open: boolean;
     onClose: () => void;
     title?: string;
-    children: React.ReactNode;
+    children: ReactNode;
     flash?: boolean;
 }) {
     if (!open) return null;
@@ -259,8 +287,14 @@ function PageSkeleton() {
                     </div>
                 </div>
                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <div className="h-12 animate-shimmer rounded-xl bg-gray-200 dark:bg-gray-800" />
-                    <div className="h-12 animate-shimmer rounded-xl bg-gray-200 dark:bg-gray-800" />
+                    <button
+                        aria-hidden
+                        className="h-12 animate-shimmer rounded-xl bg-gray-200 dark:bg-gray-800"
+                    />
+                    <button
+                        aria-hidden
+                        className="h-12 animate-shimmer rounded-xl bg-gray-200 dark:bg-gray-800"
+                    />
                     <div className="h-12 animate-shimmer rounded-xl border border-dashed border-gray-300 bg-gray-100 dark:border-gray-700 dark:bg-gray-900" />
                 </div>
             </section>
@@ -309,15 +343,6 @@ async function pullGacha(count: 1 | 10): Promise<PullResult> {
 }
 
 /**
- * APIレスポンスが TicketsAPIResponseOK かどうかの型ガード
- */
-function isTicketsOK(x: unknown): x is TicketsAPIResponseOK {
-    if (typeof x !== 'object' || x === null) return false;
-    const obj = x as Record<string, unknown>;
-    return obj.ok === true && typeof obj.tickets === 'number';
-}
-
-/**
  * API: 所持チケットの取得
  * - /api/gacha/me の仕様差分（gacha_tickets）にも暫定対応
  */
@@ -343,6 +368,30 @@ async function fetchTickets(): Promise<number> {
 }
 
 /**
+ * API: ガチャ履歴の取得（最新 limit 個）
+ * - 期待レスポンス: { ok: true, items: GachaItem[] }
+ */
+async function fetchHistory(limit = 15): Promise<GachaItem[]> {
+    try {
+        const res = await fetch(`/api/gacha/history?limit=${limit}`, { method: 'GET', cache: 'no-store' });
+        const json = (await res.json()) as unknown;
+
+        if (res.ok && isHistoryOK(json)) {
+            // サーバー順序は任意とし、そのまま最新→古いの前提で受け取る。sliceで上限のみ適用。
+            return json.items.slice(0, limit);
+        }
+
+        let msg = '履歴の取得に失敗しました。';
+        if (isHistoryNG(json)) {
+            msg = json.error + (json.detail ? `: ${json.detail}` : '');
+        }
+        throw new Error(msg);
+    } catch {
+        return [];
+    }
+}
+
+/**
  * メイン：ガチャ画面
  */
 export default function Gacha() {
@@ -354,15 +403,25 @@ export default function Gacha() {
     const [loadingTickets, setLoadingTickets] = useState<boolean>(true); // 取得中か
     const [flashRainbow, setFlashRainbow] = useState(false); // SSR時のフラッシュ
 
-    // 初回：チケット取得
+    // 履歴
+    const [historyItems, setHistoryItems] = useState<GachaItem[]>([]);
+    const [loadingHistory, setLoadingHistory] = useState<boolean>(true);
+
+    // 初回：チケット & 履歴取得
     useEffect(() => {
         let cancelled = false;
         (async () => {
             setLoadingTickets(true);
-            const t = await fetchTickets();
+            setLoadingHistory(true);
+
+            const [t, hist] = await Promise.all([fetchTickets(), fetchHistory(15)]);
+
             if (!cancelled) {
                 setTickets(t);
                 setLoadingTickets(false);
+
+                setHistoryItems(hist);
+                setLoadingHistory(false);
             }
         })();
         return () => {
@@ -391,11 +450,16 @@ export default function Gacha() {
                 setLastResult(result);
                 setTickets((v) => v - need);
 
+                // SSRがあればフラッシュ
                 const hasSSR = result.items.some((i) => i.rarity === 'SSR');
                 if (hasSSR) {
                     setFlashRainbow(true);
                     setTimeout(() => setFlashRainbow(false), 900);
                 }
+
+                // 履歴を先頭にマージ（最新を前、最大15件）
+                // result.items は「今回の排出（左→右で古い）」想定のため reverse() して最新順に
+                setHistoryItems((prev) => [...result.items.slice().reverse(), ...prev].slice(0, 15));
 
                 showToast({
                     type: 'success',
@@ -412,15 +476,15 @@ export default function Gacha() {
     );
 
     /**
-     * 結果をレア度順に並べ替えてメモ化
+     * 結果をレア度順に並べ替えてメモ化（排出一覧）
      */
     const sortedLastItems = useMemo(() => {
         if (!lastResult?.items) return [];
-        return [...lastResult.items].sort((a, b) => RARITY_ORDER[a.rarity] - RARITY_ORDER[b.rarity]);
+        return sortByRarity(lastResult.items);
     }, [lastResult]);
 
     // --- 描画 ---
-    if (loadingTickets) {
+    if (loadingTickets && loadingHistory) {
         return <PageSkeleton />;
     }
 
@@ -467,6 +531,27 @@ export default function Gacha() {
                         提供割合・ピックアップ（未）
                     </button>
                 </div>
+            </section>
+
+            {/* 履歴（最新15個） */}
+            <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+                <div className="mb-2 text-xs font-semibold text-gray-500 dark:text-gray-400">
+                    履歴（最新15件）
+                </div>
+
+                {loadingHistory ? (
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                        {Array.from({ length: 8 }).map((_, i) => (
+                            <SkeletonCard key={i} />
+                        ))}
+                    </div>
+                ) : historyItems.length === 0 ? (
+                    <div className="p-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                        履歴はまだありません。
+                    </div>
+                ) : (
+                    <ResultGrid items={historyItems} />
+                )}
             </section>
 
             {/* 結果モーダル */}

@@ -7,8 +7,9 @@ import { readAccessTokenFromCookie, verifyAccess } from '@/lib/auth/common';
 /**
  * ------------------------------------------------------------
  * サーバー: ガチャAPIハンドラ
- * - GET /api/gacha        -> handleGetGacha
- * - GET /api/gacha/me     -> handleGetGachaMe
+ * - GET /api/gacha           -> handleGetGacha
+ * - GET /api/gacha/me        -> handleGetGachaMe
+ * - GET /api/gacha/history   -> handleGetGachaHistory   ← 追加
  * ------------------------------------------------------------
  */
 
@@ -23,6 +24,7 @@ type RowItem = {
     rarity: Rarity;
     amount_min: number | null;
     amount_max: number | null;
+    icon_url: string | null;
 };
 
 /**
@@ -106,7 +108,8 @@ async function fetchActivePool(poolSlug?: string): Promise<PoolRow | null> {
  * 候補存在チェック: 通常抽選対象（pity_only=FALSE）
  */
 async function baseCandidatesExist(poolId: string): Promise<boolean> {
-    const rows = await sql`
+    type ExistsRow = { exists: boolean };
+    const rows = (await sql`
         SELECT EXISTS (
             SELECT 1
             FROM gacha_pool_items gpi
@@ -115,7 +118,7 @@ async function baseCandidatesExist(poolId: string): Promise<boolean> {
               AND gi.is_active = TRUE
               AND COALESCE(gpi.pity_only, FALSE) = FALSE
         ) AS exists;
-    `;
+    `) as unknown as ExistsRow[];
     return Boolean(rows[0]?.exists);
 }
 
@@ -123,7 +126,8 @@ async function baseCandidatesExist(poolId: string): Promise<boolean> {
  * 候補存在チェック: 最低レア保証対象
  */
 async function guaranteeCandidatesExist(poolId: string, minRarity: Rarity): Promise<boolean> {
-    const rows = await sql`
+    type ExistsRow = { exists: boolean };
+    const rows = (await sql`
         SELECT EXISTS (
             SELECT 1
             FROM gacha_pool_items gpi
@@ -132,7 +136,7 @@ async function guaranteeCandidatesExist(poolId: string, minRarity: Rarity): Prom
               AND gi.is_active = TRUE
               AND gi.rarity >= ${minRarity}::rarity
         ) AS exists;
-    `;
+    `) as unknown as ExistsRow[];
     return Boolean(rows[0]?.exists);
 }
 
@@ -140,10 +144,11 @@ async function guaranteeCandidatesExist(poolId: string, minRarity: Rarity): Prom
  * 1件抽選
  * - rarityFilter があればそのレア以上から抽選
  * - 重み付きランダム（重み 0/NULL を 1 にフォールバック）
+ * - icon_url も取得
  */
 async function pickOne(poolId: string, rarityFilter?: Rarity): Promise<RowItem | null> {
-    const rows = await sql`
-        SELECT gi.id, gi.name, gi.rarity, gi.amount_min, gi.amount_max
+    const rows = (await sql`
+        SELECT gi.id, gi.name, gi.rarity, gi.amount_min, gi.amount_max, gi.icon_url
         FROM gacha_pool_items gpi
         JOIN gacha_items gi ON gi.id = gpi.item_id
         WHERE gpi.pool_id = ${poolId}
@@ -152,8 +157,46 @@ async function pickOne(poolId: string, rarityFilter?: Rarity): Promise<RowItem |
           ${rarityFilter ? sql`AND gi.rarity >= ${rarityFilter}::rarity` : sql``}
         ORDER BY -LN(random()) / GREATEST(gpi.weight, 1)
         LIMIT 1;
+    `) as unknown as RowItem[];
+    return rows[0] ?? null;
+}
+
+/**
+ * ガチャ履歴を1レコード挿入（単発ごと）
+ * - draw_count は 1 固定（10連はループ内で1件ずつ呼ぶため）
+ * - executed_at / created_at は DB の DEFAULT を使用
+ */
+async function insertGachaHistory(params: {
+    userId: string;
+    poolId: string;
+    item: {
+        id: string;
+        name: string;
+        rarity: Rarity;
+        icon_url: string | null;
+        amount?: number;
+    };
+}) {
+    const payload = [
+        {
+            item_id: params.item.id,
+            name: params.item.name,
+            rarity: params.item.rarity,
+            icon_url: params.item.icon_url,
+            amount: params.item.amount ?? null,
+        },
+    ];
+
+    await sql`
+        INSERT INTO gacha_history (id, user_id, pool_id, draw_count, result_items)
+        VALUES (
+            gen_random_uuid(),
+            ${params.userId},
+            ${params.poolId},
+            1,
+            ${JSON.stringify(payload)}::jsonb
+        );
     `;
-    return (rows[0] as RowItem) ?? null;
 }
 
 /**
@@ -179,8 +222,8 @@ async function reduceGachaTickets(count: number) {
 
 /**
  * GET /api/gacha
- * - 単発: 1件
- * - 10連: 9件 + 最低レア保証 1件（該当候補がない場合は通常から）
+ * - 単発: 1件（抽選後に履歴1レコード）
+ * - 10連: 9件 + 最低レア保証 1件（各抽選後に履歴1レコードずつ）
  * - 成功時: { ok: true, result: { items: FrontItem[] } }
  */
 export async function handleGetGacha(req: Request) {
@@ -193,6 +236,10 @@ export async function handleGetGacha(req: Request) {
                 { status: 401, headers: NO_STORE }
             );
         }
+
+        // userId を一度だけ解決して以後で使い回す（履歴 INSERT 用）
+        const payload = (await verifyAccess(token)) as { sub: string };
+        const userId = payload.sub;
 
         // クエリ解析（count, pool）
         const url = new URL(req.url);
@@ -220,53 +267,83 @@ export async function handleGetGacha(req: Request) {
             );
         }
 
-        const results: RowItem[] = [];
+        // レスポンス用配列（抽選ごとに amount を確定し push）
+        const items: FrontItem[] = [];
 
-        if (count === 1) {
-            // 単発
-            const item = await pickOne(activePoolId);
-            if (!item)
+        // 単発 or 10連（9件）をまず処理
+        const baseDraws = count === 1 ? 1 : 9;
+        for (let i = 0; i < baseDraws; i++) {
+            const picked = await pickOne(activePoolId);
+            if (!picked) {
                 return NextResponse.json(
                     { ok: false, error: 'pick_failed', detail: '抽選に失敗しました。' },
                     { status: 500, headers: NO_STORE }
                 );
-            results.push(item);
-        } else {
-            // 10連（最初の 9 件）
-            for (let i = 0; i < 9; i++) {
-                const item = await pickOne(activePoolId);
-                if (!item)
-                    return NextResponse.json(
-                        { ok: false, error: 'pick_failed', detail: '抽選に失敗しました。' },
-                        { status: 500, headers: NO_STORE }
-                    );
-                results.push(item);
             }
 
-            // 最後の 1 件: 最低レア保証
+            // 数量はここで確定（履歴/レスポンス共通で使用）
+            const amount = pickAmount(picked.amount_min, picked.amount_max);
+
+            // 履歴 INSERT（単発ごと）
+            await insertGachaHistory({
+                userId,
+                poolId: activePoolId,
+                item: {
+                    id: picked.id,
+                    name: picked.name,
+                    rarity: picked.rarity,
+                    icon_url: picked.icon_url,
+                    amount,
+                },
+            });
+
+            // レスポンス配列へ
+            items.push({
+                id: picked.id,
+                name: picked.name,
+                rarity: picked.rarity,
+                amount,
+            });
+        }
+
+        // 10連の最後の 1 件（最低レア保証）
+        if (count === 10) {
             let last: RowItem | null = null;
             if (guaranteeMin && (await guaranteeCandidatesExist(activePoolId, guaranteeMin))) {
                 last = await pickOne(activePoolId, guaranteeMin);
             }
             if (!last) last = await pickOne(activePoolId);
-            if (!last)
+            if (!last) {
                 return NextResponse.json(
                     { ok: false, error: 'pick_failed', detail: '抽選に失敗しました。(guarantee)' },
                     { status: 500, headers: NO_STORE }
                 );
-            results.push(last);
+            }
+
+            const amount = pickAmount(last.amount_min, last.amount_max);
+
+            await insertGachaHistory({
+                userId,
+                poolId: activePoolId,
+                item: {
+                    id: last.id,
+                    name: last.name,
+                    rarity: last.rarity,
+                    icon_url: last.icon_url,
+                    amount,
+                },
+            });
+
+            items.push({
+                id: last.id,
+                name: last.name,
+                rarity: last.rarity,
+                amount,
+            });
         }
 
-        // チケット消費（最後に）
+        // チケット消費（最後にまとめて）
         await reduceGachaTickets(count);
-
-        // フロント用整形（数量は最終ここで決定）
-        const items: FrontItem[] = results.map((r) => ({
-            id: r.id,
-            name: r.name,
-            rarity: r.rarity,
-            amount: pickAmount(r.amount_min, r.amount_max),
-        }));
 
         return NextResponse.json(
             { ok: true, result: { items } },
@@ -276,7 +353,7 @@ export async function handleGetGacha(req: Request) {
         // 例外ログのみ出力（詳細はサーバーログで確認）
         console.error('handleGetGacha failed:', err);
         return NextResponse.json(
-            { ok: false, error: 'server_error', detail: '予期せぬサーバーエラーが発生しました。' },
+            { ok: false, error: 'server_error', detail: '予期せぬサーバーエラーが発生しました。' } as const,
             { status: 500, headers: NO_STORE }
         );
     }
@@ -319,6 +396,88 @@ export async function handleGetGachaMe() {
         console.error('handleGetGachaMe failed:', err);
         return NextResponse.json(
             { ok: false, error: 'server_error' as const },
+            { status: 500, headers: NO_STORE }
+        );
+    }
+}
+
+/**
+ * GET /api/gacha/history
+ * - 認証ユーザーのガチャ履歴から、直近のアイテムを最大 limit 件返す
+ * - クエリ: ?limit=15（省略時 15、1〜50 にクランプ）
+ * - レスポンス: { ok: true, items: FrontItem[] }
+ *   ※ FrontItem は { id, name, rarity, amount? }（フロントの GachaItem 互換）
+ */
+export async function handleGetGachaHistory(req?: Request) {
+    try {
+        // 認証必須
+        const token = await readAccessTokenFromCookie();
+        if (!token) {
+            return NextResponse.json(
+                { ok: false, error: 'no_auth' as const },
+                { status: 401, headers: NO_STORE }
+            );
+        }
+
+        const payload = (await verifyAccess(token)) as { sub: string };
+        const userId = payload.sub;
+
+        // limit を解析（既定 15, 1〜50 に丸める）
+        let limit = 15;
+        if (req) {
+            const url = new URL(req.url);
+            const raw = url.searchParams.get('limit');
+            const n = raw ? Number.parseInt(raw, 10) : 15;
+            if (Number.isFinite(n)) {
+                limit = Math.min(50, Math.max(1, n));
+            }
+        }
+
+        // 直近の履歴を読み出し
+        type HistoryItemRow = {
+            item_id?: string;
+            id?: string; // 互換: 万一 item_id ではなく id で保存されている場合
+            name: string;
+            rarity: Rarity;
+            icon_url: string | null;
+            amount: number | null;
+        };
+        type HistoryRow = { result_items: HistoryItemRow[] };
+
+        const rows = (await sql`
+            SELECT result_items
+            FROM gacha_history
+            WHERE user_id = ${userId}
+            ORDER BY created_at DESC
+            LIMIT ${limit}
+        `) as unknown as HistoryRow[];
+
+        // result_items は配列だが、本実装では1件ずつ入れている想定。
+        // 将来の互換性のためにフラット化し、最終的に limit 件でスライス。
+        const flattened: FrontItem[] = [];
+        for (const r of rows) {
+            const arr = Array.isArray(r.result_items) ? r.result_items : [];
+            for (const it of arr) {
+                const id = (it.item_id ?? it.id);
+                if (!id) continue;
+                flattened.push({
+                    id,
+                    name: it.name,
+                    rarity: it.rarity,
+                    amount: it.amount == null ? undefined : it.amount,
+                });
+            }
+            if (flattened.length >= limit) break;
+        }
+
+        return NextResponse.json(
+            { ok: true as const, items: flattened.slice(0, limit) },
+            { status: 200, headers: NO_STORE }
+        );
+    } catch (err) {
+        console.error('handleGetGachaHistory failed:', err);
+        return NextResponse.json(
+            { ok: false, error: 'server_error' as const, detail: '履歴の取得に失敗しました。' },
             { status: 500, headers: NO_STORE }
         );
     }
