@@ -22,6 +22,8 @@ export type GachaItem = {
     name: string;
     rarity: Rarity;
     amount?: number;
+    /** Neonのgacha_items.icon_url（例: 'icons/item-001.png'）。null/未定義ならフォールバック表示 */
+    icon_url?: string | null;
 };
 
 export type PullResult = {
@@ -188,6 +190,13 @@ function Modal({
 function ItemCard({ item, highlight }: { item: GachaItem; highlight?: boolean }) {
     const deco = RARITY_DECOR[item.rarity];
 
+    // Supabaseの公開URLを組み立て（icon_url がある場合のみ）
+    const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const imgSrc =
+        base && item.icon_url
+            ? `${base}/storage/v1/object/public/images/${item.icon_url}`
+            : null;
+
     return (
         <div
             className={`relative flex flex-col items-center justify-center rounded-2xl border border-gray-200 bg-white p-4 text-center shadow-sm transition dark:border-gray-800 dark:bg-gray-950 ${
@@ -199,7 +208,17 @@ function ItemCard({ item, highlight }: { item: GachaItem; highlight?: boolean })
             </span>
 
             <div className={`mb-3 grid h-24 w-24 place-content-center rounded-2xl bg-gray-50 text-3xl dark:bg-gray-900 ${deco.ring}`}>
-                🎁
+                {imgSrc ? (
+                    <img
+                        src={imgSrc}
+                        alt={item.name}
+                        className="h-24 w-24 rounded-2xl object-contain"
+                        loading="lazy"
+                        decoding="async"
+                    />
+                ) : (
+                    '🎁'
+                )}
             </div>
 
             <div className={`mb-1 line-clamp-2 text-sm font-semibold ${deco.text}`}>

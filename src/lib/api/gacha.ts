@@ -35,6 +35,8 @@ type FrontItem = {
     name: string;
     rarity: Rarity;
     amount?: number;
+    /** Neonのgacha_items.icon_url（例: 'icons/item-001.png'）。null/未定義可 */
+    icon_url?: string | null;
 };
 
 /**
@@ -297,12 +299,13 @@ export async function handleGetGacha(req: Request) {
                 },
             });
 
-            // レスポンス配列へ
+            // レスポンス配列へ（icon_url も含める）
             items.push({
                 id: picked.id,
                 name: picked.name,
                 rarity: picked.rarity,
                 amount,
+                icon_url: picked.icon_url,
             });
         }
 
@@ -339,6 +342,7 @@ export async function handleGetGacha(req: Request) {
                 name: last.name,
                 rarity: last.rarity,
                 amount,
+                icon_url: last.icon_url,
             });
         }
 
@@ -406,7 +410,7 @@ export async function handleGetGachaMe() {
  * - 認証ユーザーのガチャ履歴から、直近のアイテムを最大 limit 件返す
  * - クエリ: ?limit=15（省略時 15、1〜50 にクランプ）
  * - レスポンス: { ok: true, items: FrontItem[] }
- *   ※ FrontItem は { id, name, rarity, amount? }（フロントの GachaItem 互換）
+ *   ※ FrontItem は { id, name, rarity, amount?, icon_url? }（フロントの GachaItem 互換）
  */
 export async function handleGetGachaHistory(req?: Request) {
     try {
@@ -465,6 +469,7 @@ export async function handleGetGachaHistory(req?: Request) {
                     name: it.name,
                     rarity: it.rarity,
                     amount: it.amount == null ? undefined : it.amount,
+                    icon_url: it.icon_url ?? null,
                 });
             }
             if (flattened.length >= limit) break;
